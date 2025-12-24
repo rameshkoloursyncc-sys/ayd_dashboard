@@ -1,7 +1,3 @@
-                <div class="col-span-6 sm:col-span-3">
-                    <label for="city" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">City <span class="text-red-500">*</span></label>
-                    <input type="text" name="city" id="city" class="shadow-sm bg-gray-50 border border-gray-300 text-gray-900 sm:text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500" value="{{ old('city') }}" required>
-                </div>
 @extends('layouts.app')
 
 @section('content')
@@ -59,7 +55,13 @@
                     <label for="pharma_company_id" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Pharma Company</label>
                     <select name="pharma_company_id" id="pharma_company_id" class="shadow-sm bg-gray-50 border border-gray-300 text-gray-900 sm:text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500" required>
                         <option value="">Select a Pharma Company</option>
-                        @if(isset($pharmaCompanies))
+                        @if(isset($localPharmaCompanies) && count($localPharmaCompanies) > 0)
+                            @foreach($localPharmaCompanies as $company)
+                                <option value="{{ $company['id'] }}" @if(old('pharma_company_id') == $company['id']) selected @endif>
+                                    {{ $company['name'] }}
+                                </option>
+                            @endforeach
+                        @elseif(isset($pharmaCompanies) && count($pharmaCompanies) > 0)
                             @foreach($pharmaCompanies as $company)
                                 <option value="{{ $company['id'] }}" @if(old('pharma_company_id') == $company['id']) selected @endif>
                                     {{ $company['name'] }}
@@ -121,6 +123,39 @@
                 </div>
                 @endif
 
+                <!-- Subscription: checkbox with static (non-editable) plan details -->
+                <div class="col-span-6 sm:col-span-3 flex items-center mt-6">
+                    <input id="subscribe_plan" name="subscribe_plan" type="checkbox" value="1" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600" {{ old('subscribe_plan') ? 'checked' : '' }}>
+                    <label for="subscribe_plan" class="ml-2 text-sm font-medium text-gray-900 dark:text-gray-300">Assign Subscription to Pharma</label>
+                </div>
+
+                <!-- Hidden fixed plan values (not editable by user) -->
+                <input type="hidden" name="amount" value="1179">
+                <input type="hidden" name="years" value="1">
+
+                <div id="subscription_details" class="col-span-6 mt-2 {{ old('subscribe_plan') ? '' : 'hidden' }}">
+                    <div class="p-4 bg-blue-50 rounded-lg border border-blue-100">
+                        <div class="font-medium text-blue-800 mb-1">Plan Details: Standard Annual Plan</div>
+                        <div class="text-sm text-gray-700">Amount: <span class="font-semibold">₹1179</span></div>
+                        <div class="text-sm text-gray-700">Duration: <span class="font-semibold">1 Year</span></div>
+                    </div>
+                </div>
+
+                <script>
+                    document.addEventListener('DOMContentLoaded', function() {
+                        var checkbox = document.getElementById('subscribe_plan');
+                        var details = document.getElementById('subscription_details');
+                        if (!checkbox) return;
+                        checkbox.addEventListener('change', function() {
+                            if (this.checked) {
+                                details.classList.remove('hidden');
+                            } else {
+                                details.classList.add('hidden');
+                            }
+                        });
+                    });
+                </script>
+
                 <input type="hidden" name="loginMode" value="OTP">
                 <div class="col-span-6 sm:col-span-3">
                     <label for="dob" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Date of Birth</label>
@@ -149,6 +184,10 @@
                     <input type="text" name="placeName" id="placeName" class="shadow-sm bg-gray-50 border border-gray-300 text-gray-900 sm:text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500" placeholder="Pune" value="{{ old('placeName') }}" required>
                 </div>
                 <div class="col-span-6 sm:col-span-3">
+                    <label for="city" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">City <span class="text-red-500">*</span></label>
+                    <input type="text" name="city" id="city" class="shadow-sm bg-gray-50 border border-gray-300 text-gray-900 sm:text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500" placeholder="City" value="{{ old('city') }}" required>
+                </div>
+                <div class="col-span-6 sm:col-span-3">
                     <label for="registrationNo" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Medical Registration Number <span class="text-red-500">*</span></label>
                     <input type="text" name="registrationNo" id="registrationNo" class="shadow-sm bg-gray-50 border border-gray-300 text-gray-900 sm:text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500" placeholder="3424324242" value="{{ old('registrationNo') }}" required>
                 </div>
@@ -157,12 +196,13 @@
                     <input type="text" name="yearOfRegistration" id="yearOfRegistration" class="shadow-sm bg-gray-50 border border-gray-300 text-gray-900 sm:text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500" placeholder="2020" value="{{ old('yearOfRegistration') }}">
                 </div>
                 <div class="col-span-6 sm:col-span-3">
-                    <label for="service_id" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Service</label>
-                    <select name="service_id" id="service_id" class="shadow-sm bg-gray-50 border border-gray-300 text-gray-900 sm:text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500">
+                    <label for="service_ids" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Service</label>
+                    <select name="service_ids[]" id="service_ids" class="shadow-sm bg-gray-50 border border-gray-300 text-gray-900 sm:text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500">
                         <option value="">Select a Service</option>
+                        @php $oldServices = old('service_ids', []); if(!is_array($oldServices)) $oldServices = [$oldServices]; @endphp
                         @if(isset($services) && count($services) > 0)
                             @foreach($services as $service)
-                                <option value="{{ $service['id'] }}" @if(old('service_id') == $service['id']) selected @endif>{{ $service['name'] }}</option>
+                                <option value="{{ $service['id'] }}" @if(in_array($service['id'], $oldServices)) selected @endif>{{ $service['name'] }}</option>
                             @endforeach
                         @else
                             <option value="">No services available</option>

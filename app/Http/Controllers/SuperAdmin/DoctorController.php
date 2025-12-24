@@ -24,8 +24,11 @@ class DoctorController extends Controller
      */
     public function attachPharma(Request $request, $api_id)
     {
+        $api_id = trim($api_id);
         $request->validate([
             'pharma_company_id' => 'required|exists:pharma_companies,api_id',
+            'amount' => 'nullable|numeric',
+            'years' => 'nullable|integer|min:1',
         ]);
 
         // Find the pharma company by API ID
@@ -150,8 +153,67 @@ class DoctorController extends Controller
             }
         }
 
+        // Increment Quota
+        if ($pharmaCompany->api_id) {
+            $this->pinktreeApiService->incrementUsedActivationQuota($pharmaCompany->api_id, 1);
+        }
+
+        // Handle Subscription
+        if ($request->has('subscribe_plan') && $request->subscribe_plan) {
+            try {
+                $subData = [
+                    'pharmaId' => $pharmaCompany->api_id,
+                    'doctorId' => $api_id,
+                    'amount' => $request->amount ?? 1179,
+                    'years' => $request->years ?? 1,
+                    'planId' => null,
+                ];
+                $this->pinktreeApiService->subscribePlan($subData);
+                Log::info('attachPharma: Subscribed doctor to plan', $subData);
+            } catch (\Exception $e) {
+                Log::error('attachPharma: Failed to subscribe doctor', ['error' => $e->getMessage()]);
+            }
+        }
+
         return back()->with('success', 'Doctor attached to pharma company successfully.');
     }
+
+    public function subscribe(Request $request, $api_id)
+    {
+        $request->validate([
+            // 'amount' => 'required|numeric', // Fixed internally
+            // 'years' => 'required|integer|min:1', // Fixed internally
+            'subscription_id' => 'nullable|string',
+        ]);
+
+        $doctor = \App\Models\Doctor::where('api_id', $api_id)->firstOrFail();
+
+        if (!$doctor->pharmaCompany) {
+            return back()->withErrors(['error' => 'Doctor must be attached to a pharma company before subscribing.']);
+        }
+
+        try {
+            $subData = [
+                'pharmaId' => $doctor->pharmaCompany->api_id,
+                'doctorId' => $doctor->api_id,
+                'amount' => 1179, // Fixed: 999 + 18% GST
+                'years' => 1,     // Fixed: 1 Year
+                'planId' => null,
+            ];
+
+            if ($request->filled('subscription_id')) {
+                $subData['_id'] = $request->subscription_id;
+            }
+
+            $this->pinktreeApiService->subscribePlan($subData);
+            Log::info('subscribe: Subscribed/Updated doctor plan', $subData);
+            return back()->with('success', 'Subscription assigned/updated successfully.');
+        } catch (\Exception $e) {
+            Log::error('subscribe: Failed to subscribe doctor', ['error' => $e->getMessage()]);
+            return back()->withErrors(['error' => 'Failed to assign subscription.']);
+        }
+    }
+
     protected $creationService;
     protected $pinktreeApiService;
 
@@ -164,14 +226,29 @@ class DoctorController extends Controller
     public function index()
     {
         // Fetch all doctors from remote API (assume endpoint: /api/getAllCDoctors)
-        $remoteDoctorsResponse = \Http::get(env('PINKTREE_API_BASE_URL') . '/api/getAllCDoctors');
-        $remoteDoctors = $remoteDoctorsResponse->successful() ? ($remoteDoctorsResponse->json('data') ?? []) : [];
+        try {
+            $remoteDoctorsResponse = \Http::get(env('PINKTREE_API_BASE_URL') . '/api/getAllCDoctors');
+            $remoteDoctors = $remoteDoctorsResponse->successful() ? ($remoteDoctorsResponse->json('data') ?? []) : [];
+        } catch (\Exception $e) {
+            Log::error('Failed to fetch doctors from remote API: ' . $e->getMessage());
+            $remoteDoctors = [];
+            session()->flash('error', 'Unable to connect to the external API. Doctor list may be empty.');
+        }
 
         // Fetch all local doctors
         $localDoctors = Doctor::with(['pharmaCompany', 'medicalExecutive.user'])->get()->keyBy('api_id');
+        
+        // Fetch local Pharma Companies for the dropdown
+        $localPharmaCompanies = \App\Models\PharmaCompany::with('user')->get();
+
+        Log::info('Local Doctors Keys:', $localDoctors->keys()->toArray());
 
         $doctors = collect($remoteDoctors)->map(function ($remoteDoctor) use ($localDoctors) {
-            $apiId = $remoteDoctor['_id'] ?? null;
+            $apiId = isset($remoteDoctor['_id']) ? trim($remoteDoctor['_id']) : null;
+            
+            // Debug logging for specific check
+            // Log::info("Checking remote ID: '$apiId' against local keys.");
+
             $local = $apiId && $localDoctors->has($apiId) ? $localDoctors[$apiId] : null;
 
             $pharmaCompanyName = 'Not Mapped';
@@ -199,7 +276,7 @@ class DoctorController extends Controller
             ];
         });
 
-        return view('superadmin.doctors.index', compact('doctors'));
+        return view('superadmin.doctors.index', compact('doctors', 'localPharmaCompanies'));
     }
 
     public function create()
@@ -222,6 +299,12 @@ class DoctorController extends Controller
                     'name' => $service['serviceName'] ?? '',
                 ];
             })->all() : [];
+
+            // Also pass local pharma companies (DB) so Super Admin can select local records
+            $localPharmas = \App\Models\PharmaCompany::with('user')->get();
+            $viewData['localPharmaCompanies'] = $localPharmas->map(function($p) {
+                return ['id' => $p->id, 'name' => $p->user->name ?? $p->api_id ?? 'Pharma'];
+            })->all();
 
             \Log::info('[SuperAdmin][DoctorController@create] Data passed to view (API)', [
                 'pharmaCompanies' => $viewData['pharmaCompanies'],
@@ -255,33 +338,56 @@ class DoctorController extends Controller
         }
     }
 
-    public function show(Doctor $doctor)
+    public function show($api_id)
     {
-        $response = $this->pinktreeApiService->getCDoctorInfo($doctor->api_id);
+        // Try to find local doctor, but don't fail if not found
+        $doctor = Doctor::where('api_id', $api_id)->first();
+        
+        // If not local, create a temporary instance
+        if (!$doctor) {
+            $doctor = new Doctor();
+            $doctor->api_id = $api_id;
+        }
+
+        $response = $this->pinktreeApiService->getCDoctorInfo($api_id);
+        if (!$response->successful()) {
+            // Log status and body so we can debug missing fields
+            Log::error('getCDoctorInfo failed for doctor: ' . $api_id, [
+                'status' => method_exists($response, 'status') ? $response->status() : null,
+                'body' => method_exists($response, 'body') ? $response->body() : null,
+            ]);
+        } else {
+            Log::info('getCDoctorInfo successful for doctor: ' . $api_id);
+        }
+
         $apiData = $response->successful() ? $response->json('data') : [];
 
-        // Map all expected fields from API to $doctor
+        // Normalize API keys to our expected field names (maps alternate keys like emailId -> email)
+        $normalized = $this->normalizeDoctorApiData(is_array($apiData) ? $apiData : []);
+
+        // Map normalized fields onto the $doctor object
         $fields = [
             'name', 'email', 'phone', 'gender', 'dob', 'age', 'degree', 'uniqueId', 'experience', 'placeName',
             'registrationNo', 'yearOfRegistration', 'recommendation', 'approvalStatus', 'createdAt', 'updatedAt',
         ];
         foreach ($fields as $field) {
-            $doctor->{$field} = $apiData[$field] ?? null;
+            $doctor->{$field} = $normalized[$field] ?? null;
         }
 
         // Pharma company name
         $pharmaCompanyName = 'N/A';
-        if ($doctor->pharmaCompany) {
+        if ($doctor->exists && $doctor->pharmaCompany) {
             $pharmaResponse = $this->pinktreeApiService->getByPharmaId($doctor->pharmaCompany->api_id);
             if ($pharmaResponse->successful() && isset($pharmaResponse->json('data')['name'])) {
                 $pharmaCompanyName = $pharmaResponse->json('data')['name'];
             }
         }
         $doctor->pharmaCompanyName = $pharmaCompanyName;
+        $doctor->pharmaCompanyName = $pharmaCompanyName;
 
         // Resolve service names from service_ids
         $serviceNames = [];
-        if (!empty($apiData['service_ids']) && is_array($apiData['service_ids'])) {
+        if (!empty($normalized['service_ids']) && is_array($normalized['service_ids'])) {
             $servicesResponse = $this->pinktreeApiService->listServices();
             $allServices = $servicesResponse->successful() ? $servicesResponse->json('data') : [];
             $serviceMap = [];
@@ -290,7 +396,7 @@ class DoctorController extends Controller
                     $serviceMap[$service['_id']] = $service['serviceName'];
                 }
             }
-            foreach ($apiData['service_ids'] as $sid) {
+            foreach ($normalized['service_ids'] as $sid) {
                 if (isset($serviceMap[$sid])) {
                     $serviceNames[] = $serviceMap[$sid];
                 }
@@ -300,32 +406,55 @@ class DoctorController extends Controller
 
         // Resolve medical executive name using local database relationship
         $doctor->medicalExecutiveName = 'N/A';
-        if ($doctor->medical_executive_id) {
+        if ($doctor->exists && $doctor->medical_executive_id) {
             $localMedicalExecutive = $doctor->medicalExecutive;
             if ($localMedicalExecutive && $localMedicalExecutive->user) {
                 $doctor->medicalExecutiveName = $localMedicalExecutive->user->name;
             }
         }
 
-        return view('doctors.show', compact('doctor'));
+        // Check Subscription Plan
+        $planDetails = null;
+        try {
+            $planResponse = $this->pinktreeApiService->checkDoctorPlan($api_id);
+            if ($planResponse->successful()) {
+                $planDetails = $planResponse->json();
+            }
+        } catch (\Exception $e) {
+            Log::error('Failed to check doctor plan: ' . $e->getMessage());
+        }
+
+        return view('superadmin.doctors.show', compact('doctor', 'planDetails', 'apiData'));
     }
 
-    public function edit(Doctor $doctor)
+    public function edit($api_id)
     {
-        $response = $this->pinktreeApiService->getCDoctorInfo($doctor->api_id);
+        // Try to find local doctor, but don't fail if not found
+        $doctor = Doctor::where('api_id', $api_id)->first();
+        
+        // If not local, create a temporary instance
+        if (!$doctor) {
+            $doctor = new Doctor();
+            $doctor->api_id = $api_id;
+        }
+
+        $response = $this->pinktreeApiService->getCDoctorInfo($api_id);
         $apiData = $response->successful() ? $response->json('data') : [];
 
-        // Map all expected fields from API to $doctor
+        // Normalize and map fields
+        $normalized = $this->normalizeDoctorApiData(is_array($apiData) ? $apiData : []);
+
+        // Map normalized fields onto the $doctor object
         $fields = [
             'name', 'email', 'phone', 'gender', 'dob', 'age', 'degree', 'uniqueId', 'experience', 'placeName',
             'registrationNo', 'yearOfRegistration', 'recommendation', 'approvalStatus', 'createdAt', 'updatedAt',
         ];
         foreach ($fields as $field) {
-            $doctor->{$field} = $apiData[$field] ?? null;
+            $doctor->{$field} = $normalized[$field] ?? null;
         }
 
-        // Set service_ids for multi-select
-        $doctor->service_ids = isset($apiData['service_ids']) && is_array($apiData['service_ids']) ? $apiData['service_ids'] : [];
+        // Set service_ids for multi-select from normalized data
+        $doctor->service_ids = isset($normalized['service_ids']) && is_array($normalized['service_ids']) ? $normalized['service_ids'] : [];
 
         // Fetch all services for the multi-select
         $servicesResponse = $this->pinktreeApiService->listServices();
@@ -336,60 +465,199 @@ class DoctorController extends Controller
             ];
         })->all() : [];
 
-        return view('doctors.edit', compact('doctor', 'services'));
+        // Check Subscription Plan
+        $planDetails = null;
+        try {
+            $planResponse = $this->pinktreeApiService->checkDoctorPlan($api_id);
+            if ($planResponse->successful()) {
+                $planDetails = $planResponse->json();
+            }
+        } catch (\Exception $e) {
+            Log::error('Failed to check doctor plan: ' . $e->getMessage());
+        }
+
+        return view('doctors.edit', compact('doctor', 'services', 'planDetails'));
     }
 
-    public function update(Request $request, Doctor $doctor)
+    public function update(Request $request, $api_id)
     {
+        // Try to find local doctor
+        $doctor = Doctor::where('api_id', $api_id)->first();
+        
         // If approvalStatus update is being requested (e.g., approve doctor), allow that
         if ($request->has('approvalStatus')) {
             $validated = $request->validate([
                 'approvalStatus' => 'required|string',
             ]);
 
-            $response = $this->pinktreeApiService->updateDoctor($doctor->api_id, ['approvalStatus' => $validated['approvalStatus']]);
+            $response = $this->pinktreeApiService->updateDoctor($api_id, ['approvalStatus' => $validated['approvalStatus']]);
 
             if ($response->failed()) {
                 Log::error('Doctor ApprovalStatus Update - updateDoctor API Response (Failed):', ['body' => $response->body()]);
-                if ($request->ajax() || $request->wantsJson()) {
-                    return response()->json(['success' => false, 'message' => 'Failed to update Doctor approvalStatus via API.'], 500);
+                // Try to extract friendly API message
+                $msg = 'Failed to update Doctor approvalStatus via API.';
+                try {
+                    if (method_exists($response, 'json')) {
+                        $rj = $response->json();
+                        if (is_array($rj)) {
+                            if (!empty($rj['message'])) $msg = $rj['message'];
+                            elseif (!empty($rj['error'])) $msg = $rj['error'];
+                            elseif (!empty($rj['errors'])) $msg = json_encode($rj['errors']);
+                        }
+                    }
+                } catch (\Exception $e) {
+                    // fall back to body
+                    try { $msg = (string)$response->body(); } catch (\Exception $ex) {}
                 }
-                return back()->withErrors(['error' => 'Failed to update Doctor approvalStatus via API.'])->withInput();
+
+                if ($request->ajax() || $request->wantsJson()) {
+                    return response()->json(['success' => false, 'message' => $msg], 500);
+                }
+                return back()->withErrors(['error' => $msg])->withInput();
             }
 
             if ($request->ajax() || $request->wantsJson()) {
-                return response()->json(['success' => true, 'message' => 'Doctor approval status updated successfully.']);
+                return response()->json(['success' => true, 'message' => 'Doctor approvalStatus updated successfully.']);
             }
-
-            return redirect()->route('superadmin.doctors.index')->with('success', 'Doctor approval status updated successfully.');
+            return back()->with('success', 'Doctor approvalStatus updated successfully.');
         }
 
-        // Fallback: update general doctor fields (name/email)
+        // Regular update logic
         $validatedData = $request->validate([
             'name' => 'required|string|max:255',
-            'email' => 'required|string|email|max:255',
+            'phone' => 'required|string|max:20',
+            'gender' => 'required|in:Male,Female,Other',
+            'dob' => 'nullable|date',
+            'age' => 'nullable|integer|min:18|max:100',
+            'degree' => 'nullable|string|max:255',
+            'placeName' => 'nullable|string|max:255',
+            'registrationNo' => 'nullable|string|max:255',
+            'yearOfRegistration' => 'nullable|integer|min:1900|max:' . date('Y'),
+            'email' => 'nullable|email|max:255',
+            'service_ids' => 'nullable|array',
+            'service_ids.*' => 'string',
+            // Subscription fields
+            'subscribe_plan' => 'nullable|boolean',
+            'amount' => 'nullable|numeric',
+            'years' => 'nullable|integer|min:1',
+            'planId' => 'nullable|string',
         ]);
 
-        $response = $this->pinktreeApiService->updateDoctor($doctor->api_id, $validatedData);
+        $response = $this->pinktreeApiService->updateDoctor($api_id, $validatedData);
 
         if ($response->failed()) {
             Log::error('Doctor Update - updateDoctor API Response (Failed):', ['body' => $response->body()]);
-            return back()->withErrors(['error' => 'Failed to update Doctor via API.'])->withInput();
+            // Extract friendly message
+            $msg = 'Failed to update Doctor via API.';
+            try {
+                if (method_exists($response, 'json')) {
+                    $rj = $response->json();
+                    if (is_array($rj)) {
+                        if (!empty($rj['message'])) $msg = $rj['message'];
+                        elseif (!empty($rj['error'])) $msg = $rj['error'];
+                        elseif (!empty($rj['errors'])) $msg = json_encode($rj['errors']);
+                    }
+                }
+            } catch (\Exception $e) {
+                try { $msg = (string)$response->body(); } catch (\Exception $ex) {}
+            }
+            return back()->withErrors(['error' => $msg])->withInput();
+        }
+
+        // Subscription Plan
+        if ($request->has('subscribe_plan') && $request->subscribe_plan && $doctor && $doctor->pharmaCompany) {
+            $subData = [
+                'pharmaId' => $doctor->pharmaCompany->api_id,
+                'doctorId' => $api_id,
+                'amount' => 1179, // Fixed: 999 + 18% GST
+                'years' => 1,     // Fixed: 1 Year
+                'planId' => $request->planId ?? null,
+            ];
+            // If planId is provided (from hidden input in edit form), it maps to _id in API for update
+            if ($request->filled('planId')) {
+                $subData['_id'] = $request->planId;
+                unset($subData['planId']); // Ensure we send _id for updates if that's what API expects, or keep planId if API handles mapping. 
+                // Based on previous context, update uses _id. subscribePlan method in service sends data as is.
+                // Let's check subscribePlan in Service. It sends to /api/plan/subscribe.
+                // If the API expects '_id' for update, we should set it.
+                // The previous code in subscribe() method did: if ($request->filled('subscription_id')) { $subData['_id'] = ... }
+            }
+            
+            $this->pinktreeApiService->subscribePlan($subData);
         }
 
         return redirect()->route('superadmin.doctors.index')->with('success', 'Doctor updated successfully.');
     }
 
-    public function destroy(Doctor $doctor)
+    /**
+     * Normalize API response keys into expected local keys.
+     * Accepts the raw API data array and returns an array with keys we use in the views/controllers.
+     */
+    private function normalizeDoctorApiData(array $apiData): array
     {
-        $response = $this->pinktreeApiService->deleteDoctor($doctor->api_id);
+        $aliases = [
+            'name' => ['name', 'fullName', 'doctorName', 'doctor_name'],
+            'email' => ['email', 'emailId', 'email_id'],
+            'phone' => ['phone', 'mobileNo', 'mobile_no', 'phoneNumber', 'phone_no'],
+            'dob' => ['dob', 'dateOfBirth', 'DOB', 'birthDate'],
+            'age' => ['age'],
+            'gender' => ['gender'],
+            'degree' => ['degree', 'qualification'],
+            'placeName' => ['placeName', 'place', 'place_name'],
+            'registrationNo' => ['registrationNo', 'registration_number', 'regNo', 'registration_no'],
+            'yearOfRegistration' => ['yearOfRegistration', 'year', 'year_of_registration'],
+            'uniqueId' => ['uniqueId', 'unique_id'],
+            'experience' => ['experience'],
+            'recommendation' => ['recommendation'],
+            'approvalStatus' => ['approvalStatus', 'approval_status'],
+            'createdAt' => ['createdAt', 'created_at'],
+            'updatedAt' => ['updatedAt', 'updated_at'],
+            'service_ids' => ['service_ids', 'serviceIds', 'service_id', 'serviceId'],
+        ];
+
+        $result = [];
+        foreach ($aliases as $key => $names) {
+            $result[$key] = null;
+            foreach ($names as $n) {
+                if (array_key_exists($n, $apiData) && $apiData[$n] !== null) {
+                    $result[$key] = $apiData[$n];
+                    break;
+                }
+            }
+        }
+
+        // Ensure service_ids is an array
+        if (!empty($result['service_ids']) && !is_array($result['service_ids'])) {
+            // Try to decode JSON or split comma separated
+            if (is_string($result['service_ids'])) {
+                $maybe = json_decode($result['service_ids'], true);
+                if (json_last_error() === JSON_ERROR_NONE && is_array($maybe)) {
+                    $result['service_ids'] = $maybe;
+                } else {
+                    // comma separated
+                    $result['service_ids'] = array_filter(array_map('trim', explode(',', $result['service_ids'])));
+                }
+            } else {
+                $result['service_ids'] = [$result['service_ids']];
+            }
+        }
+
+        return $result;
+    }
+
+    public function destroy($api_id)
+    {
+        $response = $this->pinktreeApiService->deleteDoctor($api_id);
 
         if ($response->failed()) {
             Log::error('Doctor Destroy - deleteDoctor API Response (Failed):', ['body' => $response->body()]);
             return back()->withErrors(['error' => 'Failed to delete Doctor via API.'])->withInput();
         }
 
-        $doctor->delete();
+        $doctor = Doctor::where('api_id', $api_id)->first();
+        if ($doctor) {
+            $doctor->delete();
+        }
 
         return redirect()->route('superadmin.doctors.index')->with('success', 'Doctor deleted successfully.');
     }

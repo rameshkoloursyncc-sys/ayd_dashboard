@@ -40,7 +40,13 @@ class MedicalExecutiveController extends Controller
             $executive->pharma_company_name = $pharmaName;
             return $executive;
         });
-        return view('superadmin.medical-executives.index', ['medicalExecutives' => $executivesWithPharmaName]);
+
+        $pharmaCompanies = PharmaCompany::with('user')->get();
+
+        return view('superadmin.medical-executives.index', [
+            'medicalExecutives' => $executivesWithPharmaName,
+            'pharmaCompanies' => $pharmaCompanies
+        ]);
     }
 
     public function create()
@@ -86,7 +92,7 @@ class MedicalExecutiveController extends Controller
 
     public function edit(MedicalExecutive $medicalExecutive)
     {
-        $pharmaCompanies = PharmaCompany::all();
+        $pharmaCompanies = PharmaCompany::with('user')->get();
         return view('superadmin.medical-executives.edit', compact('medicalExecutive', 'pharmaCompanies'));
     }
 
@@ -99,18 +105,40 @@ class MedicalExecutiveController extends Controller
             'password' => 'nullable|string|min:8|confirmed',
         ]);
 
-        $user = $medicalExecutive->user;
-        $user->name = $validatedData['name'];
-        $user->email = $validatedData['email'];
-        if (!empty($validatedData['password'])) {
-            $user->password = Hash::make($validatedData['password']);
+        try {
+            // Update external API
+            $apiData = [
+                'name' => $validatedData['name'],
+                'emailId' => $validatedData['email'],
+            ];
+
+            if (!empty($validatedData['password'])) {
+                $apiData['password'] = $validatedData['password'];
+            }
+
+            $response = $this->pinktreeApiService->updateMedicalExecutive($medicalExecutive->api_id, $apiData);
+
+            if ($response->failed()) {
+                Log::error('Medical Executive Update - updateMedicalExecutive API Response (Failed):', ['body' => $response->body()]);
+                return back()->withErrors(['error' => 'Failed to update Medical Executive via API.'])->withInput();
+            }
+
+            $user = $medicalExecutive->user;
+            $user->name = $validatedData['name'];
+            $user->email = $validatedData['email'];
+            if (!empty($validatedData['password'])) {
+                $user->password = Hash::make($validatedData['password']);
+            }
+            $user->save();
+
+            $medicalExecutive->pharma_company_id = $validatedData['pharma_company_id'];
+            $medicalExecutive->save();
+
+            return redirect()->route('superadmin.medical-executives.index')->with('success', 'Medical Executive updated successfully.');
+        } catch (\Exception $e) {
+            Log::error('Medical Executive update failed: ' . $e->getMessage());
+            return back()->withErrors(['error' => 'Failed to update Medical Executive: ' . $e->getMessage()])->withInput();
         }
-        $user->save();
-
-        $medicalExecutive->pharma_company_id = $validatedData['pharma_company_id'];
-        $medicalExecutive->save();
-
-        return redirect()->route('superadmin.medical-executives.index')->with('success', 'Medical Executive updated successfully.');
     }
 
     public function destroy(MedicalExecutive $medicalExecutive)
@@ -129,5 +157,25 @@ class MedicalExecutiveController extends Controller
             Log::error('Medical Executive deletion failed: ' . $e->getMessage());
             return back()->withErrors(['error' => 'An unexpected error occurred during deletion.'])->withInput();
         }
+    }
+
+    public function getByPharma($pharmaApiId)
+    {
+        $pharma = PharmaCompany::where('api_id', $pharmaApiId)->first();
+        if (!$pharma) {
+            return response()->json(['data' => []]);
+        }
+        
+        $executives = MedicalExecutive::where('pharma_company_id', $pharma->id)
+            ->with('user')
+            ->get()
+            ->map(function($exec) {
+                return [
+                    '_id' => $exec->id, // Use local ID for assignment
+                    'name' => $exec->user->name ?? 'Unknown',
+                ];
+            });
+
+        return response()->json(['data' => $executives]);
     }
 }

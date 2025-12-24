@@ -18,7 +18,7 @@
     @endif
 
     <div class="p-4 bg-white border border-gray-200 rounded-lg shadow-sm dark:border-gray-700 sm:p-6 dark:bg-gray-800">
-        <form action="{{ route('superadmin.medical-executives.update', $medicalExecutive->id) }}" method="POST">
+        <form action="{{ route('superadmin.medical-executives.update', $medicalExecutive->api_id) }}" method="POST">
             @csrf
             @method('PUT')
             <div class="grid grid-cols-6 gap-6">
@@ -35,7 +35,7 @@
                     <select name="pharma_company_id" id="pharma_company_id" class="shadow-sm bg-gray-50 border border-gray-300 text-gray-900 sm:text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500" required>
                         @foreach($pharmaCompanies as $company)
                             <option value="{{ $company->id }}" @if(old('pharma_company_id', $medicalExecutive->pharma_company_id) == $company->id) selected @endif>
-                                {{ $company->name }}
+                                {{ $company->user->name ?? $company->api_id }}
                             </option>
                         @endforeach
                     </select>

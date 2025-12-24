@@ -80,6 +80,10 @@ class StoreDoctorRequest extends FormRequest
             'service_ids.*' => 'string',
             'email' => 'nullable|email',
             'password' => 'nullable|string',
+            'subscribe_plan' => 'nullable|boolean',
+            'amount' => 'nullable|numeric',
+            'years' => 'nullable|integer|min:1',
+            'planId' => 'nullable|string',
         ];
 
         $user = Auth::user();

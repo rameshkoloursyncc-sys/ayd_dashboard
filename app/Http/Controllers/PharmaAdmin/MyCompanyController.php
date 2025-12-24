@@ -61,10 +61,33 @@ class MyCompanyController extends Controller
                         }
                     }
                 }
-                // Map specialitySignedUpFor to name
-                $specialityName = isset($pharmaData['specialitySignedUpFor']) && isset($serviceMap[$pharmaData['specialitySignedUpFor']])
-                    ? $serviceMap[$pharmaData['specialitySignedUpFor']]
-                    : ($pharmaData['specialitySignedUpFor'] ?? 'N/A');
+                // Map specialitySignedUpFor to name (handle array, JSON string, comma-separated, or single)
+                $specialityRaw = $pharmaData['specialitySignedUpFor'] ?? null;
+                $resolved = [];
+                if (is_array($specialityRaw)) {
+                    $ids = $specialityRaw;
+                } elseif (is_string($specialityRaw)) {
+                    $decoded = json_decode($specialityRaw, true);
+                    if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                        $ids = $decoded;
+                    } elseif (strpos($specialityRaw, ',') !== false) {
+                        $parts = array_map('trim', explode(',', $specialityRaw));
+                        $ids = array_map(function($p) { return trim($p, "\'\" "); }, $parts);
+                    } else {
+                        $ids = [$specialityRaw];
+                    }
+                } else {
+                    $ids = [];
+                }
+
+                foreach ($ids as $sid) {
+                    if (isset($serviceMap[$sid])) {
+                        $resolved[] = $serviceMap[$sid];
+                    } elseif (!empty($sid)) {
+                        $resolved[] = $sid;
+                    }
+                }
+                $specialityName = !empty($resolved) ? implode(', ', $resolved) : 'N/A';
                 // Advertisement is not an image, just pass as value
                 $advertisementValue = $pharmaData['advertisement'] ?? null;
                 return view('pharma-admin.my-company.show', [
@@ -149,6 +172,24 @@ class MyCompanyController extends Controller
             'totalActivationQuota',
         ];
         $pharmaCompanyForEdit = array_intersect_key($pharmaData, array_flip($updatableFields));
+
+        // Normalize specialitySignedUpFor to an array for the edit form
+        $rawSpeciality = $pharmaCompanyForEdit['specialitySignedUpFor'] ?? null;
+        if (is_array($rawSpeciality)) {
+            // ok
+        } elseif (is_string($rawSpeciality)) {
+            $decoded = json_decode($rawSpeciality, true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                $pharmaCompanyForEdit['specialitySignedUpFor'] = $decoded;
+            } elseif (strpos($rawSpeciality, ',') !== false) {
+                $parts = array_map('trim', explode(',', $rawSpeciality));
+                $pharmaCompanyForEdit['specialitySignedUpFor'] = array_map(function($p){ return trim($p, "\'\" "); }, $parts);
+            } else {
+                $pharmaCompanyForEdit['specialitySignedUpFor'] = $rawSpeciality ? [$rawSpeciality] : [];
+            }
+        } else {
+            $pharmaCompanyForEdit['specialitySignedUpFor'] = [];
+        }
 
         return view('pharma-admin.my-company.edit', [
             'pharmaCompany' => (object)$pharmaCompanyForEdit,

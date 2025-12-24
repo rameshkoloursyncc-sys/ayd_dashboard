@@ -47,15 +47,36 @@ class PharmaCompanyController extends Controller
 
                 $pharmaCompanies = collect($apiPharmaCompanies)->map(function ($company) use ($serviceNameMap) {
                     $company['pharmaCompanyName'] = $company['name'] ?? 'N/A';
-                    $speciality = $company['specialitySignedUpFor'] ?? null;
-                    if (is_array($speciality)) {
-                        $names = array_map(function($sid) use ($serviceNameMap) {
-                            return $serviceNameMap[$sid] ?? $sid;
-                        }, $speciality);
-                        $company['specialitySignedUpForName'] = implode(', ', $names);
-                    } else {
-                        $company['specialitySignedUpForName'] = $serviceNameMap[$speciality] ?? ($speciality ?? 'N/A');
-                    }
+                        $speciality = $company['specialitySignedUpFor'] ?? null;
+                        // Resolve speciality which may be: array of ids, JSON string of array, comma-separated ids, or single id/string
+                        $resolvedNames = [];
+                        if (is_array($speciality)) {
+                            $ids = $speciality;
+                        } elseif (is_string($speciality)) {
+                            // Try JSON decode first
+                            $decoded = json_decode($speciality, true);
+                            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                                $ids = $decoded;
+                            } elseif (strpos($speciality, ',') !== false) {
+                                $parts = array_map('trim', explode(',', $speciality));
+                                // strip quotes
+                                $ids = array_map(function($p) { return trim($p, "\'\" "); }, $parts);
+                            } else {
+                                // single string value
+                                $ids = [$speciality];
+                            }
+                        } else {
+                            $ids = [];
+                        }
+
+                        foreach ($ids as $sid) {
+                            if (isset($serviceNameMap[$sid])) {
+                                $resolvedNames[] = $serviceNameMap[$sid];
+                            } elseif (!empty($sid)) {
+                                $resolvedNames[] = $sid;
+                            }
+                        }
+                        $company['specialitySignedUpForName'] = !empty($resolvedNames) ? implode(', ', $resolvedNames) : 'N/A';
                     $company['local_record'] = PharmaCompany::where('api_id', $company['_id'])->first();
                     return $company;
                 });
@@ -133,24 +154,52 @@ class PharmaCompanyController extends Controller
 
             // 2. Create pharma company on external API
             $specialityPayload = is_array($request->speciality) ? array_values($request->speciality) : [$request->speciality];
-            $response = $this->pinktreeApiService->createPharma([
+            $payload = [
                 'pharmaCoCode' => $request->pharma_co_code,
                 'name' => $request->name,
-                'specialitySignedUpFor' => $specialityPayload,
+                // Pinktree expects a string for specialitySignedUpFor — send JSON string
+                'specialitySignedUpFor' => json_encode($specialityPayload),
                 'campaignTimeStartPeriod' => $request->campaign_start_date,
                 'campaignTimeEndPeriod' => $request->campaign_end_date,
                 'digitalScratchCardConnectedTo' => $request->unique_code_pool,
                 'advertisement' => $request->advertisement,
                 'banner' => $request->banner,
                 'totalActivationQuota' => (int)$request->total_activation_quota,
-            ]);
+            ];
+
+            Log::info('Pharma Company Store - createPharma Request Payload:', ['payload' => $payload]);
+            $response = $this->pinktreeApiService->createPharma($payload);
 
             if ($response->successful()) {
                 Log::info('Pharma Company Store - createPharma API Response (Success):', ['body' => $response->json()]);
             } else {
-                Log::error('Pharma Company Store - createPharma API Response (Failed):', ['body' => $response->body()]);
+                $respBody = $response->body();
+                Log::error('Pharma Company Store - createPharma API Response (Failed):', ['body' => $respBody]);
                 $user->delete();
-                return back()->withErrors(['error' => 'Failed to create pharma company via API: ' . $response->body()])->withInput();
+
+                // Try to extract friendly validation messages from API response
+                $friendly = 'Failed to create pharma company via API.';
+                try {
+                    $json = $response->json();
+                    $data = $json['data'] ?? null;
+                    if (is_array($data)) {
+                        $msgs = [];
+                        foreach ($data as $k => $v) {
+                            if (is_string($v)) {
+                                $msgs[] = "$k: $v";
+                            } elseif (is_array($v)) {
+                                $msgs[] = "$k: " . json_encode($v);
+                            }
+                        }
+                        if (!empty($msgs)) {
+                            $friendly .= ' ' . implode(' | ', $msgs);
+                        }
+                    }
+                } catch (\Exception $e) {
+                    // ignore parsing errors
+                }
+
+                return back()->withErrors(['error' => $friendly])->withInput();
             }
 
             $apiPharmaCompany = $response->json();
@@ -220,17 +269,31 @@ class PharmaCompanyController extends Controller
             ]);
             // Map specialitySignedUpFor to name
             $specialityRaw = $pharmaData['specialitySignedUpFor'] ?? null;
+            $resolved = [];
             if (is_array($specialityRaw)) {
-                $names = [];
-                foreach ($specialityRaw as $sid) {
-                    $names[] = $serviceMap[$sid] ?? $sid;
+                $ids = $specialityRaw;
+            } elseif (is_string($specialityRaw)) {
+                $decoded = json_decode($specialityRaw, true);
+                if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                    $ids = $decoded;
+                } elseif (strpos($specialityRaw, ',') !== false) {
+                    $parts = array_map('trim', explode(',', $specialityRaw));
+                    $ids = array_map(function($p) { return trim($p, "\'\" "); }, $parts);
+                } else {
+                    $ids = [$specialityRaw];
                 }
-                $specialityName = implode(', ', $names);
             } else {
-                $specialityName = isset($specialityRaw) && isset($serviceMap[$specialityRaw])
-                    ? $serviceMap[$specialityRaw]
-                    : ($specialityRaw ?? 'N/A');
+                $ids = [];
             }
+
+            foreach ($ids as $sid) {
+                if (isset($serviceMap[$sid])) {
+                    $resolved[] = $serviceMap[$sid];
+                } elseif (!empty($sid)) {
+                    $resolved[] = $sid;
+                }
+            }
+            $specialityName = !empty($resolved) ? implode(', ', $resolved) : 'N/A';
             // Advertisement is not an image, just pass as value
             $advertisementValue = $pharmaData['advertisement'] ?? null;
             $localPharmaCompany = PharmaCompany::where('api_id', $pharmaCompanyApiId)->first();
@@ -341,6 +404,24 @@ class PharmaCompanyController extends Controller
             // Leave as-is if parsing fails
         }
 
+        // Normalize specialitySignedUpFor to an array for the edit form
+        $rawSpeciality = $pharmaCompanyForEdit['specialitySignedUpFor'] ?? null;
+        if (is_array($rawSpeciality)) {
+            // ok
+        } elseif (is_string($rawSpeciality)) {
+            $decoded = json_decode($rawSpeciality, true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                $pharmaCompanyForEdit['specialitySignedUpFor'] = $decoded;
+            } elseif (strpos($rawSpeciality, ',') !== false) {
+                $parts = array_map('trim', explode(',', $rawSpeciality));
+                $pharmaCompanyForEdit['specialitySignedUpFor'] = array_map(function($p){ return trim($p, "\'\" "); }, $parts);
+            } else {
+                $pharmaCompanyForEdit['specialitySignedUpFor'] = $rawSpeciality ? [$rawSpeciality] : [];
+            }
+        } else {
+            $pharmaCompanyForEdit['specialitySignedUpFor'] = [];
+        }
+
         return view('superadmin.pharma-companies.edit', [
             'pharmaCompany' => $pharmaCompanyForEdit,
             'services' => $services,
@@ -363,20 +444,24 @@ class PharmaCompanyController extends Controller
             'banner' => 'nullable',
         ]);
 
-        try {
+            try {
             $specialityPayload = is_array($request->speciality) ? array_values($request->speciality) : [$request->speciality];
-            $response = $this->pinktreeApiService->createPharma([ // Pinktree API uses createPharma for update if _id is present
+            $payload = [ // Pinktree API uses createPharma for update if _id is present
                 '_id' => $pharmaCompanyApiId,
                 'pharmaCoCode' => $request->pharma_co_code,
                 'name' => $request->name,
-                'specialitySignedUpFor' => $specialityPayload,
+                // Ensure we send a JSON string for speciality
+                'specialitySignedUpFor' => json_encode($specialityPayload),
                 'campaignTimeStartPeriod' => $request->campaign_start_date,
                 'campaignTimeEndPeriod' => $request->campaign_end_date,
                 'digitalScratchCardConnectedTo' => $request->unique_code_pool,
                 'advertisement' => $request->advertisement,
                 'banner' => $request->banner,
                 'totalActivationQuota' => (int)$request->total_activation_quota,
-            ]);
+            ];
+
+            Log::info('Pharma Company Update - createPharma Request Payload:', ['payload' => $payload]);
+            $response = $this->pinktreeApiService->createPharma($payload);
 
             if ($response->successful()) {
                 Log::info('Pharma Company Update - createPharma API Response (Success):', ['body' => $response->json()]);
@@ -398,12 +483,37 @@ class PharmaCompanyController extends Controller
                     }
                 }
 
+            }
+            else {
+                $respBody = $response->body();
+                Log::error('Pharma Company Update - createPharma API Response (Failed):', ['body' => $respBody]);
+
+                // Try to extract friendly validation messages from API response
+                $friendly = 'Failed to update pharma company via API.';
+                try {
+                    $json = $response->json();
+                    $data = $json['data'] ?? null;
+                    if (is_array($data)) {
+                        $msgs = [];
+                        foreach ($data as $k => $v) {
+                            if (is_string($v)) {
+                                $msgs[] = "$k: $v";
+                            } elseif (is_array($v)) {
+                                $msgs[] = "$k: " . json_encode($v);
+                            }
+                        }
+                        if (!empty($msgs)) {
+                            $friendly .= ' ' . implode(' | ', $msgs);
+                        }
+                    }
+                } catch (\Exception $e) {
+                    // ignore parsing errors
+                }
+
+                return back()->withErrors(['error' => $friendly])->withInput();
+            }
                 return redirect()->route('superadmin.pharma-companies.index')
                                  ->with('success', 'Pharma Company updated successfully.');
-            } else {
-                Log::error('Pharma Company Update - createPharma API Response (Failed):', ['body' => $response->body()]);
-                return back()->withErrors(['error' => 'Failed to update pharma company via API: ' . $response->body()])->withInput();
-            }
         } catch (\Exception $e) {
             Log::error('Pharma company update failed: ' . $e->getMessage());
             return back()->withErrors(['error' => 'An unexpected error occurred during update.'])->withInput();

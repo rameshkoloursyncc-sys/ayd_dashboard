@@ -107,8 +107,9 @@ class DoctorController extends Controller
         }
     }
 
-    public function show(Doctor $doctor)
+    public function show($api_id)
     {
+        $doctor = Doctor::where('api_id', $api_id)->firstOrFail();
         if (Auth::user()->pharma_company_id !== $doctor->pharma_company_id) {
             abort(403);
         }
@@ -163,11 +164,19 @@ class DoctorController extends Controller
             }
         }
 
-        return view('doctors.show', compact('doctor'));
+        // Fetch subscription details
+        $planDetails = null;
+        $planResponse = $this->pinktreeApiService->checkDoctorPlan($doctor->api_id);
+        if ($planResponse->successful()) {
+            $planDetails = $planResponse->json('data');
+        }
+
+        return view('doctors.show', compact('doctor', 'planDetails'));
     }
 
-    public function edit(Doctor $doctor)
+    public function edit($api_id)
     {
+        $doctor = Doctor::where('api_id', $api_id)->firstOrFail();
         if (Auth::user()->pharma_company_id !== $doctor->pharma_company_id) {
             abort(403);
         }
@@ -205,11 +214,19 @@ class DoctorController extends Controller
             ];
         })->all() : [];
 
-        return view('doctors.edit', compact('doctor', 'services'));
+        // Fetch subscription details
+        $planDetails = null;
+        $planResponse = $this->pinktreeApiService->checkDoctorPlan($doctor->api_id);
+        if ($planResponse->successful()) {
+            $planDetails = $planResponse->json('data');
+        }
+
+        return view('doctors.edit', compact('doctor', 'services', 'planDetails'));
     }
 
-    public function update(Request $request, Doctor $doctor)
+    public function update(Request $request, $api_id)
     {
+        $doctor = Doctor::where('api_id', $api_id)->firstOrFail();
         if (Auth::user()->pharma_company_id !== $doctor->pharma_company_id) {
             abort(403);
         }
@@ -217,6 +234,18 @@ class DoctorController extends Controller
         $validatedData = $request->validate([
             'name' => 'required|string|max:255',
             'email' => 'required|string|email|max:255',
+            'phone' => 'nullable|string|max:20',
+            'gender' => 'nullable|string',
+            'age' => 'nullable|integer',
+            'degree' => 'nullable|string|max:100',
+            'uniqueId' => 'nullable|string',
+            'service_ids' => 'nullable|array',
+            'service_ids.*' => 'string',
+            // Subscription fields
+            'subscribe_plan' => 'nullable|boolean',
+            'amount' => 'nullable|numeric',
+            'years' => 'nullable|integer|min:1',
+            'planId' => 'nullable|string',
         ]);
 
         $response = $this->pinktreeApiService->updateDoctor($doctor->api_id, $validatedData);
@@ -226,11 +255,30 @@ class DoctorController extends Controller
             return back()->withErrors(['error' => 'Failed to update Doctor via API.'])->withInput();
         }
 
+        // Subscription Plan
+        if ($request->has('subscribe_plan') && $request->subscribe_plan && $doctor->pharmaCompany) {
+            $subData = [
+                'pharmaId' => $doctor->pharmaCompany->api_id,
+                'doctorId' => $doctor->api_id,
+                'amount' => 1179, // Fixed: 999 + 18% GST
+                'years' => 1,     // Fixed: 1 Year
+                'planId' => $request->planId ?? null,
+            ];
+            
+            if ($request->filled('planId')) {
+                $subData['_id'] = $request->planId;
+                unset($subData['planId']); 
+            }
+            
+            $this->pinktreeApiService->subscribePlan($subData);
+        }
+
         return redirect()->route('pharma-admin.doctors.index')->with('success', 'Doctor updated successfully.');
     }
 
-    public function destroy(Doctor $doctor)
+    public function destroy($api_id)
     {
+        $doctor = Doctor::where('api_id', $api_id)->firstOrFail();
         if (Auth::user()->pharma_company_id !== $doctor->pharma_company_id) {
             abort(403);
         }

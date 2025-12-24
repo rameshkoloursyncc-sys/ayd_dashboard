@@ -9,7 +9,7 @@
     <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
         <div class="bg-gradient-to-r from-blue-400 to-purple-400 rounded-lg shadow-lg p-6 text-white">
             <h2 class="text-lg font-semibold mb-2">My Company</h2>
-            <p class="text-base text-gray-900 dark:text-white mb-2">{{ $pharmaCompany->id ? $pharmaCompany->id : 'N/A' }} - {{ $pharmaCompany->user_id ? $pharmaCompany->user_id : 'N/A' }}</p>
+            <p class="text-base text-gray-900 dark:text-white mb-2">{{ optional($pharmaCompany)->id ?? 'N/A' }} - {{ optional($pharmaCompany)->user_id ?? 'N/A' }}</p>
             <a href="{{ route('pharma-admin.my-company.show') }}" class="text-blue-600 hover:underline">View Company Details</a>
         </div>
         <div class="bg-gradient-to-r from-green-400 to-teal-400 rounded-lg shadow-lg p-6 text-white">

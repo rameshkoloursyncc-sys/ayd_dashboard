@@ -24,6 +24,53 @@ class DoctorCreationService
         $this->pinktreeApiService = $pinktreeApiService;
     }
 
+    /**
+     * Attempt to extract a friendly error message from an HTTP response object.
+     * Falls back to raw body if no structured message is found.
+     *
+     * @param mixed $response
+     * @return string
+     */
+    private function extractApiErrorMessage($response): string
+    {
+        try {
+            if (method_exists($response, 'json')) {
+                $json = $response->json();
+                if (is_array($json)) {
+                    if (!empty($json['message']) && is_string($json['message'])) {
+                        return $json['message'];
+                    }
+                    if (!empty($json['error']) && is_string($json['error'])) {
+                        return $json['error'];
+                    }
+                    if (!empty($json['errors'])) {
+                        return is_string($json['errors']) ? $json['errors'] : json_encode($json['errors']);
+                    }
+                    if (!empty($json['data']) && is_array($json['data'])) {
+                        // sometimes API returns nested message inside data
+                        if (!empty($json['data']['message']) && is_string($json['data']['message'])) {
+                            return $json['data']['message'];
+                        }
+                    }
+                    // If nothing matched, return the whole json as string
+                    return json_encode($json);
+                }
+            }
+        } catch (\Exception $e) {
+            // ignore and fallthrough to body
+        }
+
+        try {
+            if (method_exists($response, 'body')) {
+                return (string) $response->body();
+            }
+        } catch (\Exception $e) {
+            // ignore
+        }
+
+        return 'Unknown API error';
+    }
+
         /**
      * Extract only the fields needed for Pinktree API doctor creation.
      */
@@ -123,7 +170,8 @@ class DoctorCreationService
                     'status' => $response->status(),
                     'body' => $response->body(),
                 ]);
-                throw new Exception('Failed to create doctor on the external platform. API Error: ' . $response->body());
+                $msg = $this->extractApiErrorMessage($response);
+                throw new Exception('Failed to create doctor on external platform: ' . $msg);
             }
 
             $apiResponse = $response->json();
@@ -140,7 +188,15 @@ class DoctorCreationService
                 Log::error('[DoctorCreation] Pinktree API did not return an _id for the created doctor', [
                     'apiResponse' => $apiResponse
                 ]);
-                $apiErrorMsg = $apiResponse['message'] ?? 'Pinktree API did not return an _id for the created doctor.';
+                // Try to extract a friendly message from the API response
+                $apiErrorMsg = null;
+                if (is_array($apiResponse)) {
+                    if (!empty($apiResponse['message'])) $apiErrorMsg = $apiResponse['message'];
+                    elseif (!empty($apiResponse['error'])) $apiErrorMsg = $apiResponse['error'];
+                    elseif (!empty($apiResponse['errors'])) $apiErrorMsg = json_encode($apiResponse['errors']);
+                    else $apiErrorMsg = json_encode($apiResponse);
+                }
+                $apiErrorMsg = $apiErrorMsg ?? 'Pinktree API did not return an _id for the created doctor.';
                 throw new Exception($apiErrorMsg);
             }
 
@@ -155,6 +211,23 @@ class DoctorCreationService
                 'pharma_company_id' => $data['pharma_company_id'],
                 'medical_executive_id' => $data['medical_executive_id'] ?? null,
             ], $apiId);
+
+            // Increment Quota
+            if ($pharmaApiId) {
+                $this->pinktreeApiService->incrementUsedActivationQuota($pharmaApiId, 1);
+            }
+
+            // Subscription Plan
+            if (!empty($data['subscribe_plan']) && $pharmaApiId) {
+                $subData = [
+                    'pharmaId' => $pharmaApiId,
+                    'doctorId' => $apiId,
+                    'amount' => $data['amount'] ?? 1179,
+                    'years' => $data['years'] ?? 1,
+                    'planId' => $data['planId'] ?? null,
+                ];
+                $this->pinktreeApiService->subscribePlan($subData);
+            }
 
             // Step 3: Always send WhatsApp onboarding link after doctor creation
             $onboardingLink = env('DOCTOR_ONBOARDING_LINK', 'https://play.google.com/store/apps/details?id=com.pinktreehealth');

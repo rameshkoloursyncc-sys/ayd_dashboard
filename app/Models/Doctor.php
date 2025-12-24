@@ -29,11 +29,6 @@ class Doctor extends Model
         return $this->belongsTo(MedicalExecutive::class);
     }
 
-    /**
-     * Get the route key for the model.
-     *
-     * @return string
-     */
     public function getRouteKeyName()
     {
         return 'api_id';

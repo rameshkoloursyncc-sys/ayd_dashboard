@@ -26,10 +26,6 @@ class SuperAdminController extends Controller
         $totalDoctors = 0;
         $totalPatients = 0;
         $totalServices = 0;
-        $specialityLabels = [];
-        $specialityData = [];
-        $pharmaCompanyLabels = [];
-        $doctorsByPharmaCompanyData = [];
 
         try {
             // Get pharma companies from API
@@ -59,37 +55,13 @@ class SuperAdminController extends Controller
             $totalMedicalExecutives = \App\Models\MedicalExecutive::count();
             $totalDoctors = \App\Models\Doctor::count();
 
-            // Chart data processing
-            $specialityCounts = [];
-            $doctorsByPharmaCompany = [];
-            foreach ($pharmaCompanies as $company) {
-                $speciality = $company['specialitySignedUpFor'] ?? 'Unknown';
-                if (!isset($specialityCounts[$speciality])) {
-                    $specialityCounts[$speciality] = 0;
-                }
-                $specialityCounts[$speciality]++;
-
-                // Doctors by pharma company
-                $pharmaApiId = $company['_id'] ?? null;
-                if ($pharmaApiId) {
-                    $doctorsByPharmaCompany[$company['name'] ?? $pharmaApiId] = \App\Models\Doctor::where('pharma_company_id', function($q) use ($pharmaApiId) {
-                        $q->select('id')->from('pharma_companies')->where('api_id', $pharmaApiId)->limit(1);
-                    })->count();
-                }
-            }
-            $specialityLabels = array_keys($specialityCounts);
-            $specialityData = array_values($specialityCounts);
-            $pharmaCompanyLabels = array_keys($doctorsByPharmaCompany);
-            $doctorsByPharmaCompanyData = array_values($doctorsByPharmaCompany);
-
         } catch (\Exception $e) {
             Log::error('Could not connect to Pinktree API on dashboard: ' . $e->getMessage());
             session()->flash('error', 'Could not connect to the API. Some dashboard data may be missing.');
         }
 
         return view('superadmin.dashboard', compact(
-            'totalPharmaCompanies', 'totalMedicalExecutives', 'totalDoctors', 'totalPatients', 'totalServices',
-            'specialityLabels', 'specialityData', 'pharmaCompanyLabels', 'doctorsByPharmaCompanyData'
+            'totalPharmaCompanies', 'totalMedicalExecutives', 'totalDoctors', 'totalPatients', 'totalServices'
         ));
     }
 }

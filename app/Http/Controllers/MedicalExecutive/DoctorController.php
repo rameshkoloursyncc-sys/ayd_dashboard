@@ -116,8 +116,9 @@ class DoctorController extends Controller
         }
     }
 
-    public function show(Doctor $doctor)
+    public function show($api_id)
     {
+        $doctor = Doctor::where('api_id', $api_id)->firstOrFail();
         Log::info('Showing doctor with api_id:', ['api_id' => $doctor->api_id]);
         $foundDoctor = Doctor::where('api_id', $doctor->api_id)->first();
         Log::info('Doctor found in DB:', ['doctor' => $foundDoctor]);
@@ -185,11 +186,19 @@ class DoctorController extends Controller
 
         Log::info('DoctorController@show: Final data sent to view', ['doctor' => $apiData]);
 
-        return view('doctors.show', ['doctor' => (object)$apiData]);
+        // Fetch subscription details
+        $planDetails = null;
+        $planResponse = $this->pinktreeApiService->checkDoctorPlan($doctor->api_id);
+        if ($planResponse->successful()) {
+            $planDetails = $planResponse->json('data');
+        }
+
+        return view('doctors.show', ['doctor' => (object)$apiData, 'planDetails' => $planDetails]);
     }
 
-    public function edit(Doctor $doctor)
+    public function edit($api_id)
     {
+        $doctor = Doctor::where('api_id', $api_id)->firstOrFail();
         if (Auth::id() !== $doctor->medicalExecutive->user_id) {
             abort(403);
         }
@@ -221,11 +230,19 @@ class DoctorController extends Controller
             $services = [];
         }
 
-        return view('doctors.edit', ['doctor' => (object)$apiData, 'services' => $services]);
+        // Fetch subscription details
+        $planDetails = null;
+        $planResponse = $this->pinktreeApiService->checkDoctorPlan($doctor->api_id);
+        if ($planResponse->successful()) {
+            $planDetails = $planResponse->json('data');
+        }
+
+        return view('doctors.edit', ['doctor' => (object)$apiData, 'services' => $services, 'planDetails' => $planDetails]);
     }
 
-    public function update(Request $request, Doctor $doctor)
+    public function update(Request $request, $api_id)
     {
+        $doctor = Doctor::where('api_id', $api_id)->firstOrFail();
         if (Auth::id() !== $doctor->medicalExecutive->user_id) {
             abort(403);
         }
@@ -239,7 +256,13 @@ class DoctorController extends Controller
             'age' => 'nullable|integer',
             'degree' => 'nullable|string|max:100',
             'uniqueId' => 'nullable|string',
-            // Add more fields as needed
+            'service_ids' => 'nullable|array',
+            'service_ids.*' => 'string',
+            // Subscription fields
+            'subscribe_plan' => 'nullable|boolean',
+            'amount' => 'nullable|numeric',
+            'years' => 'nullable|integer|min:1',
+            'planId' => 'nullable|string',
         ]);
 
         try {
@@ -251,6 +274,24 @@ class DoctorController extends Controller
                 return back()->withErrors(['error' => 'Failed to update Doctor via API.'])->withInput();
             }
 
+            // Subscription Plan
+            if ($request->has('subscribe_plan') && $request->subscribe_plan && $doctor->pharmaCompany) {
+                $subData = [
+                    'pharmaId' => $doctor->pharmaCompany->api_id,
+                    'doctorId' => $doctor->api_id,
+                    'amount' => 1179, // Fixed: 999 + 18% GST
+                    'years' => 1,     // Fixed: 1 Year
+                    'planId' => $request->planId ?? null,
+                ];
+                
+                if ($request->filled('planId')) {
+                    $subData['_id'] = $request->planId;
+                    unset($subData['planId']); 
+                }
+                
+                $this->pinktreeApiService->subscribePlan($subData);
+            }
+
             return redirect()->route('medical-executive.doctors.index')->with('success', 'Doctor updated successfully.');
 
         } catch (\Exception $e) {
@@ -259,8 +300,9 @@ class DoctorController extends Controller
         }
     }
 
-    public function destroy(Doctor $doctor)
+    public function destroy($api_id)
     {
+        $doctor = Doctor::where('api_id', $api_id)->firstOrFail();
         if (Auth::id() !== $doctor->medicalExecutive->user_id) {
             abort(403);
         }

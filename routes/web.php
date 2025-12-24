@@ -70,10 +70,13 @@ Route::middleware(['auth', 'is_super_admin'])->name('superadmin.')->prefix('supe
     Route::resource('sponsors', SponsorController::class);
     Route::resource('patients', PatientController::class);
     Route::resource('medical-executives', SuperAdminMedicalExecutiveController::class);
+    Route::get('medical-executives/by-pharma/{pharmaApiId}', [SuperAdminMedicalExecutiveController::class, 'getByPharma'])->name('medical-executives.byPharma');
     Route::resource('doctors', SuperAdminDoctorController::class);
 
     // Attach doctor to pharma company
     Route::post('doctors/{api_id}/attach-pharma', [SuperAdminDoctorController::class, 'attachPharma'])->name('doctors.attachPharma');
+    // Assign subscription to doctor
+    Route::post('doctors/{api_id}/subscribe', [SuperAdminDoctorController::class, 'subscribe'])->name('doctors.subscribe');
 
     Route::get('/profile/edit', [ProfileController::class, 'edit'])->name('profile.edit');
     Route::put('/profile/update', [ProfileController::class, 'update'])->name('profile.update');

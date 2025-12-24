@@ -217,4 +217,38 @@ class PinktreeApiService
     {
         return Http::post($this->baseUrl . '/api/getAYDPatientListFromFilters', $filters);
     }
+
+    // Quota Management
+    public function incrementUsedActivationQuota(string $pharmaApiId, int $increment = 1)
+    {
+        // First, get the current pharma details to calculate new quota
+        $response = $this->getByPharmaId($pharmaApiId);
+        if ($response->failed()) {
+            Log::error("Failed to fetch pharma details for quota increment: " . $response->body());
+            return false;
+        }
+
+        $pharmaData = $response->json('data') ?? $response->json();
+        $currentUsed = isset($pharmaData['usedActivationQuota']) ? (int)$pharmaData['usedActivationQuota'] : 0;
+        $newUsed = $currentUsed + $increment;
+        
+        return Http::post($this->baseUrl . '/api/createPharma', [
+            '_id' => $pharmaApiId,
+            'usedActivationQuota' => $newUsed
+        ]);
+    }
+
+    // Subscription Plan
+    public function subscribePlan(array $data)
+    {
+        // Expected data: pharmaId, doctorId, amount, years, planId (optional)
+        return Http::post($this->baseUrl . '/api/plan/subscribe', $data);
+    }
+
+    public function checkDoctorPlan(string $doctorId)
+    {
+        return Http::post($this->baseUrl . '/api/plan/checkDoctorPlan', [
+            'doctorID' => $doctorId,
+        ]);
+    }
 }
