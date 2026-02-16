@@ -106,6 +106,15 @@ class DoctorCreationService
             Log::info('[DoctorCreation] Received data in create()', $data);
             // Step 1: Prepare and send only the required fields to Pinktree API
             $pinktreePayload = $this->extractPinktreeDoctorPayload($data);
+            Log::info('[DoctorCreation] Extracted payload for Pinktree API', [
+                'payload' => $pinktreePayload,
+                'bank_fields' => [
+                    'accountno' => $pinktreePayload['accountno'] ?? 'not provided',
+                    'ifsc' => $pinktreePayload['ifsc'] ?? 'not provided',
+                    'pan' => $pinktreePayload['pan'] ?? 'not provided',
+                    'addaar' => $pinktreePayload['addaar'] ?? 'not provided',
+                ]
+            ]);
             // Before calling Pinktree API, ensure pharma activation quota is not exceeded by fetching pharma details from API.
             $pharmaIdentifier = $data['pharma_company_id'] ?? null; // may be local id or API id depending on caller
             $localPharma = null;
@@ -158,6 +167,7 @@ class DoctorCreationService
             Log::info('[DoctorCreation] Sending data to Pinktree API for doctor creation', [
                 'payload' => $pinktreePayload
             ]);
+            Log::info('[DoctorCreation] Calling Pinktree API endpoint: createDoctor');
             $response = $this->pinktreeApiService->createDoctor($pinktreePayload);
 
             Log::info('[DoctorCreation] Pinktree API response', [
@@ -220,8 +230,9 @@ class DoctorCreationService
             // Subscription Plan
             if (!empty($data['subscribe_plan']) && $pharmaApiId) {
                 $subData = [
-                    'pharmaId' => $pharmaApiId,
-                    'doctorId' => $apiId,
+                    'doctorID' => $apiId,
+                    'email' => $data['email'] ?? null,
+                    'phone' => $data['mobile_no'] ?? null,
                     'amount' => $data['amount'] ?? 1179,
                     'years' => $data['years'] ?? 1,
                     'planId' => $data['planId'] ?? null,

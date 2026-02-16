@@ -77,6 +77,12 @@ Route::middleware(['auth', 'is_super_admin'])->name('superadmin.')->prefix('supe
     Route::post('doctors/{api_id}/attach-pharma', [SuperAdminDoctorController::class, 'attachPharma'])->name('doctors.attachPharma');
     // Assign subscription to doctor
     Route::post('doctors/{api_id}/subscribe', [SuperAdminDoctorController::class, 'subscribe'])->name('doctors.subscribe');
+    // Mark payout as paid
+    Route::post('doctors/{api_id}/payout', [SuperAdminDoctorController::class, 'storePayout'])->name('doctors.storePayout');
+
+    // Bank Account Routes
+    Route::post('doctors/bank-account', [SuperAdminDoctorController::class, 'storeBankAccount'])->name('doctors.storeBankAccount');
+    Route::put('doctors/bank-account/{accountId}', [SuperAdminDoctorController::class, 'updateBankAccount'])->name('doctors.updateBankAccount');
 
     Route::get('/profile/edit', [ProfileController::class, 'edit'])->name('profile.edit');
     Route::put('/profile/update', [ProfileController::class, 'update'])->name('profile.update');
@@ -104,3 +110,6 @@ Route::middleware(['auth', 'role:medical_executive'])->name('medical-executive.'
     Route::get('/profile/password', [\App\Http\Controllers\SuperAdmin\ProfileController::class, 'changePassword'])->name('profile.password');
     Route::put('/profile/password/update', [\App\Http\Controllers\SuperAdmin\ProfileController::class, 'updatePassword'])->name('profile.password.update');
 });
+
+// QR Code AJAX Route
+Route::middleware(['auth'])->get('/doctor/{api_id}/qr', [\App\Http\Controllers\SuperAdmin\DoctorController::class, 'getDoctorQRView'])->name('doctor.qr.ajax');

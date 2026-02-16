@@ -18,6 +18,33 @@ class PinktreeApiService
         }
     }
 
+    /**
+     * Centralized logging for API requests made by this service.
+     */
+    private function logHttpCall(string $method, string $url, $payload, $response)
+    {
+        try {
+            $status = method_exists($response, 'status') ? $response->status() : null;
+            $success = method_exists($response, 'successful') ? $response->successful() : null;
+            $body = method_exists($response, 'body') ? $response->body() : null;
+            $headers = method_exists($response, 'headers') ? $response->headers() : null;
+
+            Log::info('[PinktreeAPI] HTTP Call', [
+                'method' => $method,
+                'url' => $url,
+                'payload' => $payload,
+                'status' => $status,
+                'success' => $success,
+                'response_headers' => $headers,
+                // Trim response body to avoid huge logs
+                'response_body_snippet' => is_string($body) ? substr($body, 0, 2000) : $body,
+            ]);
+        } catch (Exception $e) {
+            // Ensure logging never throws
+            Log::error('[PinktreeAPI] Failed to log HTTP call', ['error' => $e->getMessage()]);
+        }
+    }
+
     // Pharma Company Endpoints
     public function getAllPharma()
     {
@@ -100,11 +127,110 @@ class PinktreeApiService
         return Http::delete($this->baseUrl . '/api/deleteDoctor/' . $apiId);
     }
 
+    // Bank Account Endpoints
+    public function createAccount(array $data)
+    {
+        $url = $this->baseUrl . '/api/createAccount';
+        // Remove 'otherDocument' if not set or null
+        if (!isset($data['otherDocument']) || $data['otherDocument'] === null) {
+            unset($data['otherDocument']);
+        } else if (!is_array($data['otherDocument'])) {
+            // If present but not array, wrap as array
+            $data['otherDocument'] = [$data['otherDocument']];
+        }
+        $response = Http::withHeaders([
+            'Content-Type' => 'application/json'
+        ])->post($url, $data);
+        $this->logHttpCall('POST', $url, $data, $response);
+        return $response;
+    }
+
+    public function updateAccount(array $data)
+    {
+        $url = $this->baseUrl . '/api/createAccount';
+        // Remove 'otherDocument' if not set or null
+        if (!isset($data['otherDocument']) || $data['otherDocument'] === null) {
+            unset($data['otherDocument']);
+        } else if (!is_array($data['otherDocument'])) {
+            // If present but not array, wrap as array
+            $data['otherDocument'] = [$data['otherDocument']];
+        }
+        // _id must be present for update
+        $response = Http::withHeaders([
+            'Content-Type' => 'application/json'
+        ])->post($url, $data);
+        $this->logHttpCall('POST', $url, $data, $response);
+        return $response;
+    }
+
+    public function deleteAccount(string $accountId)
+    {
+        return Http::delete($this->baseUrl . '/api/deleteAccount/' . $accountId);
+    }
+
     public function getCDoctorInfo(string $doctorId)
     {
-        return Http::post($this->baseUrl . '/api/getCDoctorInfo', [
+        Log::info('[PinktreeAPI] Fetching doctor details from external API', [
             'doctorId' => $doctorId,
+            'endpoint' => $this->baseUrl . '/api/getCDoctorInfo'
         ]);
+        
+        $url = $this->baseUrl . '/api/getCDoctorInfo';
+        $payload = ['doctorId' => $doctorId];
+        $response = Http::post($url, $payload);
+
+        // Log request/response details
+        $this->logHttpCall('POST', $url, $payload, $response);
+        
+        Log::info('[PinktreeAPI] Doctor details fetch response', [
+            'doctorId' => $doctorId,
+            'status' => method_exists($response, 'status') ? $response->status() : null,
+            'success' => method_exists($response, 'successful') ? $response->successful() : null,
+            'response_json' => $response->successful() ? $response->json() : null,
+            'has_bank_fields' => [
+                'accountno' => isset($response->json('data')['accountno']) ? 'present' : 'missing',
+                'ifsc' => isset($response->json('data')['ifsc']) ? 'present' : 'missing',
+                'pan' => isset($response->json('data')['pan']) ? 'present' : 'missing',
+                'addaar' => isset($response->json('data')['addaar']) ? 'present' : 'missing',
+            ]
+        ]);
+        
+        return $response;
+    }
+
+    /**
+     * Fetch doctor bank accounts by doctor API id using Pinktree endpoint
+     * Returns array of account objects (or empty array on failure)
+     */
+    public function getDoctorAccountsById(string $doctorId)
+    {
+        try {
+            $url = $this->baseUrl . '/api/listDoctorAccountsById/' . $doctorId;
+            $response = Http::get($url);
+
+            // centralized logging
+            $this->logHttpCall('GET', $url, null, $response);
+
+            if ($response->successful()) {
+                $payload = $response->json();
+                Log::info('[PinktreeAPI] listDoctorAccountsById success', ['doctorId' => $doctorId, 'count' => is_array($payload['data'] ?? null) ? count($payload['data']) : 0]);
+                return $payload['data'] ?? [];
+            }
+
+            Log::error('[PinktreeAPI] listDoctorAccountsById failed', [
+                'doctorId' => $doctorId,
+                'status' => method_exists($response, 'status') ? $response->status() : null,
+                'body' => method_exists($response, 'body') ? $response->body() : null,
+            ]);
+
+            return [];
+        } catch (Exception $e) {
+            Log::error('[PinktreeAPI] Exception in listDoctorAccountsById', [
+                'doctorId' => $doctorId,
+                'error' => $e->getMessage(),
+            ]);
+            return [];
+        }
     }
 
     // Services Endpoints
@@ -242,13 +368,51 @@ class PinktreeApiService
     public function subscribePlan(array $data)
     {
         // Expected data: pharmaId, doctorId, amount, years, planId (optional)
-        return Http::post($this->baseUrl . '/api/plan/subscribe', $data);
+        $url = $this->baseUrl . '/api/plan/subscribe';
+        try {
+            $response = Http::post($url, $data);
+            // centralized logging
+            $this->logHttpCall('POST', $url, $data, $response);
+            return $response;
+        } catch (Exception $e) {
+            Log::error('[PinktreeAPI] subscribePlan exception', ['payload' => $data, 'error' => $e->getMessage()]);
+            throw $e;
+        }
     }
 
     public function checkDoctorPlan(string $doctorId)
     {
-        return Http::post($this->baseUrl . '/api/plan/checkDoctorPlan', [
-            'doctorID' => $doctorId,
-        ]);
+        $url = $this->baseUrl . '/api/plan/checkDoctorPlan';
+        $data = ['doctorID' => $doctorId];
+        $response = Http::post($url, $data);
+        $this->logHttpCall('POST', $url, $data, $response);
+        return $response;
+    }
+
+    // Payout Endpoints
+    public function getWalletSummary(string $doctorId)
+    {
+        return Http::get($this->baseUrl . '/api/doctor/wallet/summary/' . $doctorId);
+    }
+
+    public function getPayoutHistory(string $doctorId)
+    {
+        return Http::get($this->baseUrl . '/api/doctor/payout-history/' . $doctorId);
+    }
+
+    public function createPayout(array $data)
+    {
+        // Ensure payload matches external API requirements
+        $payload = [
+            'doctorId' => $data['doctorId'] ?? $data['doctor_id'] ?? null,
+            'payoutamount' => $data['payoutAmount'] ?? $data['payoutamount'] ?? null,
+            'payoutMonth' => $data['payoutMonth'] ?? null,
+            'payoutEndDate' => $data['payoutEndDate'] ?? null,
+        ];
+        // Remove nulls
+        $payload = array_filter($payload, function($v) { return $v !== null; });
+        return Http::withHeaders([
+            'Content-Type' => 'application/json'
+        ])->post($this->baseUrl . '/api/doctor/payout', $payload);
     }
 }

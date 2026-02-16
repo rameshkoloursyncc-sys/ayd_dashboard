@@ -14,6 +14,19 @@
             </div>
             <div class="text-xl font-semibold text-gray-900 dark:text-white mb-1">{{ $doctor->name ?? 'N/A' }}</div>
             <div class="text-gray-500 dark:text-gray-400 mb-2">{{ $doctor->degree ?? '' }}</div>
+            <div class="mb-4 mt-2 w-full">
+                <div class="p-3 bg-white dark:bg-gray-900 border border-dashed border-gray-300 dark:border-gray-700 rounded-lg w-full">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-xs font-semibold text-gray-700 dark:text-gray-200">Doctor QR Code</span>
+                        <button id="load-qr-btn" type="button" data-doctor-id="{{ $doctor->api_id }}" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md text-xs">
+                            Show QR
+                        </button>
+                    </div>
+                    <div id="qr-code-container" class="flex items-center justify-center min-h-[72px]">
+                        <p class="text-[11px] text-gray-500 dark:text-gray-400">Click "Show QR" to load the code.</p>
+                    </div>
+                </div>
+            </div>
             <div class="flex flex-col gap-1 text-sm">
                 <div><span class="font-medium">Email:</span> {{ $doctor->email ?? 'N/A' }}</div>
                 <div><span class="font-medium">Phone:</span> {{ $doctor->phone ?? 'N/A' }}</div>
@@ -172,6 +185,106 @@
                 </div>
             @endif
 
+            <!-- Wallet & Payouts Section -->
+            <div class="flex justify-between items-center mt-6 mb-4">
+                <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-200">Wallet & Payouts</h2>
+                <button type="button" data-modal-target="mark-payout-modal" data-modal-toggle="mark-payout-modal" class="text-white bg-green-700 hover:bg-green-800 focus:ring-4 focus:ring-green-300 font-medium rounded-lg text-sm px-5 py-2.5 dark:bg-green-600 dark:hover:bg-green-700 focus:outline-none dark:focus:ring-green-800">
+                    Mark as Paid
+                </button>
+            </div>
+
+            @if(isset($walletSummary))
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                <div class="p-4 bg-white border border-gray-200 rounded-lg shadow-sm dark:bg-gray-800 dark:border-gray-700">
+                    <div class="text-sm font-medium text-gray-500 dark:text-gray-400">Total Earnings</div>
+                    <div class="text-2xl font-bold text-gray-900 dark:text-white">₹{{ number_format($walletSummary['totalEarnings'] ?? 0, 2) }}</div>
+                </div>
+                <div class="p-4 bg-white border border-gray-200 rounded-lg shadow-sm dark:bg-gray-800 dark:border-gray-700">
+                    <div class="text-sm font-medium text-gray-500 dark:text-gray-400">Total Paid</div>
+                    <div class="text-2xl font-bold text-green-600 dark:text-green-400">₹{{ number_format($walletSummary['totalPaid'] ?? 0, 2) }}</div>
+                </div>
+                <div class="p-4 bg-white border border-gray-200 rounded-lg shadow-sm dark:bg-gray-800 dark:border-gray-700">
+                    <div class="text-sm font-medium text-gray-500 dark:text-gray-400">Balance Due</div>
+                    <div class="text-2xl font-bold text-red-600 dark:text-red-400">₹{{ number_format($walletSummary['balance'] ?? 0, 2) }}</div>
+                </div>
+            </div>
+            @endif
+
+            <h3 class="text-md font-semibold text-gray-700 dark:text-gray-300 mb-2">Payout History</h3>
+            @if(isset($payoutHistory) && count($payoutHistory) > 0)
+            <div class="relative overflow-x-auto shadow-md sm:rounded-lg mb-6">
+                <table class="w-full text-sm text-left text-gray-500 dark:text-gray-400">
+                    <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+                        <tr>
+                            <th scope="col" class="px-6 py-3">Date</th>
+                            <th scope="col" class="px-6 py-3">Month</th>
+                            <th scope="col" class="px-6 py-3">Amount</th>
+                            <th scope="col" class="px-6 py-3">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach($payoutHistory as $payout)
+                        <tr class="bg-white border-b dark:bg-gray-800 dark:border-gray-700">
+                            <td class="px-6 py-4">{{ \Carbon\Carbon::parse($payout['payoutDate'] ?? $payout['createdAt'])->format('d M Y') }}</td>
+                            <td class="px-6 py-4">{{ $payout['payoutMonth'] ?? 'N/A' }}</td>
+                            <td class="px-6 py-4">₹{{ number_format($payout['payoutAmount'] ?? 0, 2) }}</td>
+                            <td class="px-6 py-4">
+                                <span class="bg-green-100 text-green-800 text-xs font-medium mr-2 px-2.5 py-0.5 rounded dark:bg-green-900 dark:text-green-300">
+                                    {{ ucfirst($payout['status'] ?? 'paid') }}
+                                </span>
+                            </td>
+                        </tr>
+                        @endforeach
+                    </tbody>
+                </table>
+            </div>
+            @else
+                <p class="text-sm text-gray-500 dark:text-gray-400 mb-6">No payout history found.</p>
+            @endif
+
+            <!-- Bank Account Details -->
+            <div class="flex justify-between items-center mt-6 mb-4">
+                <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-200">Bank Account Details</h2>
+                <button type="button" data-modal-target="add-bank-account-modal" data-modal-toggle="add-bank-account-modal" class="text-white bg-blue-700 hover:bg-blue-800 focus:ring-4 focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-2.5 dark:bg-blue-600 dark:hover:bg-blue-700 focus:outline-none dark:focus:ring-blue-800">
+                    Add Bank Account
+                </button>
+            </div>
+            
+            @if(isset($doctor->bankAccounts) && count($doctor->bankAccounts) > 0)
+            <div class="relative overflow-x-auto shadow-md sm:rounded-lg mb-6">
+                <table class="w-full text-sm text-left text-gray-500 dark:text-gray-400">
+                    <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+                        <tr>
+                            <th scope="col" class="px-6 py-3">Account No</th>
+                            <th scope="col" class="px-6 py-3">IFSC</th>
+                            <th scope="col" class="px-6 py-3">PAN</th>
+                            <th scope="col" class="px-6 py-3">Aadhaar</th>
+                            <th scope="col" class="px-6 py-3">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach($doctor->bankAccounts as $account)
+                        <tr class="bg-white border-b dark:bg-gray-800 dark:border-gray-700">
+                            <td class="px-6 py-4">{{ $account['accountno'] ?? 'N/A' }}</td>
+                            <td class="px-6 py-4">{{ $account['ifsc'] ?? 'N/A' }}</td>
+                            <td class="px-6 py-4">{{ $account['pan'] ?? 'N/A' }}</td>
+                            <td class="px-6 py-4">{{ $account['addaar'] ?? $account['aadhaar'] ?? 'N/A' }}</td>
+                            <td class="px-6 py-4">
+                                <form action="{{ route('superadmin.doctors.destroyBankAccount', $account['_id'] ?? $account['id']) }}" method="POST" onsubmit="return confirm('Are you sure?');" class="inline">
+                                    @csrf
+                                    @method('DELETE')
+                                    <button type="submit" class="font-medium text-red-600 dark:text-red-500 hover:underline">Delete</button>
+                                </form>
+                            </td>
+                        </tr>
+                        @endforeach
+                    </tbody>
+                </table>
+            </div>
+            @else
+            <p class="text-sm text-gray-600 dark:text-gray-400 mb-6">No bank accounts found.</p>
+            @endif
+
             <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-200 mt-6 mb-4">System Info</h2>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
                 <div><span class="font-medium">Created At:</span> {{ $doctor->createdAt ? date('d M Y, H:i', strtotime($doctor->createdAt)) : 'N/A' }}</div>
@@ -194,4 +307,228 @@
         <a href="{{ route($route) }}" class="text-white bg-primary-700 hover:bg-primary-800 focus:ring-4 focus:ring-primary-300 font-medium rounded-lg text-sm px-5 py-2.5 dark:bg-primary-600 dark:hover:bg-primary-700 focus:outline-none dark:focus:ring-primary-800">Back</a>
     </div>
 </div>
+
+<!-- Add Bank Account Modal -->
+<div id="add-bank-account-modal" tabindex="-1" aria-hidden="true" class="fixed top-0 left-0 right-0 z-50 hidden w-full p-4 overflow-x-hidden overflow-y-auto md:inset-0 h-[calc(100%-1rem)] max-h-full">
+    <div class="relative w-full max-w-md max-h-full">
+        <!-- Modal content -->
+        <div class="relative bg-white rounded-lg shadow dark:bg-gray-700">
+            <button type="button" class="absolute top-3 right-2.5 text-gray-400 bg-transparent hover:bg-gray-200 hover:text-gray-900 rounded-lg text-sm p-1.5 ml-auto inline-flex items-center dark:hover:bg-gray-800 dark:hover:text-white" data-modal-hide="add-bank-account-modal">
+                <svg aria-hidden="true" class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L11.414 10 7.121 5.707a1 1 0 010-1.414z" clip-rule="evenodd"></path></svg>
+                <span class="sr-only">Close modal</span>
+            </button>
+            <div class="px-6 py-6 lg:px-8">
+                <h3 class="mb-4 text-xl font-medium text-gray-900 dark:text-white">Add Bank Account</h3>
+                <form class="space-y-6" action="{{ route('superadmin.doctors.storeBankAccount') }}" method="POST">
+                    @csrf
+                    <input type="hidden" name="doctorId" value="{{ $doctor->api_id }}">
+                    <input type="hidden" name="source" value="admins">
+                    
+                    <div>
+                        <label for="accountno" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Account Number</label>
+                        <input type="text" name="accountno" id="accountno" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-600 dark:border-gray-500 dark:placeholder-gray-400 dark:text-white" required>
+
+            <script>
+            document.addEventListener('DOMContentLoaded', function() {
+                var btn = document.getElementById('load-qr-btn');
+                var qrContainer = document.getElementById('qr-code-container');
+
+                if (!btn || !qrContainer) return;
+
+                btn.addEventListener('click', function() {
+                    var doctorId = btn.getAttribute('data-doctor-id');
+                    if (!doctorId) {
+                        console.error('No doctorId found on load-qr-btn (doctor self-view)');
+                        return;
+                    }
+
+                    console.log('Fetching QR for doctorId (doctor self-view):', doctorId);
+                    qrContainer.innerHTML = '<svg class="animate-spin h-6 w-6 text-blue-600 dark:text-blue-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>';
+
+                    fetch('https://ayd.pinktreehealth.com/api/qr/' + doctorId)
+                        .then(function(res) {
+                            console.log('QR API raw response status (doctor self-view):', res.status);
+                            if (!res.ok) throw new Error('API request failed');
+                            return res.json();
+                        })
+                        .then(function(json) {
+                            console.log('QR API parsed JSON (doctor self-view):', json);
+                            if (json.status && json.data && json.data.qrCode) {
+                                console.log('QR data payload (doctor self-view):', json.data.qrData || {});
+                                // Render image and a download link. Download may be blocked by CORS for remote URLs,
+                                // but for data URLs or same-origin resources this will trigger a download.
+                                var qrHtml = '<div class="flex flex-col items-center">' +
+                                    '<img id="doctor-qr-img" src="' + json.data.qrCode + '" alt="Doctor QR Code" class="w-40 h-auto max-w-full border border-gray-300 dark:border-gray-600 rounded" />' +
+                                    '<a id="download-qr-btn" href="' + json.data.qrCode + '" download="doctor_qr_' + doctorId + '.png" class="mt-2 px-3 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-100 dark:hover:bg-gray-200 text-black dark:text-black border border-gray-400 rounded text-xs">Download QR</a>' +
+                                    '</div>';
+                                qrContainer.innerHTML = qrHtml;
+
+                                // Fallback: fetch as blob and force download (handles cross-origin where allowed)
+                                var downloadBtn = document.getElementById('download-qr-btn');
+                                if (downloadBtn) {
+                                    downloadBtn.addEventListener('click', function(e) {
+                                        e.preventDefault();
+                                        var href = this.href;
+                                        fetch(href).then(function(res){ return res.blob(); }).then(function(blob){
+                                            var url = URL.createObjectURL(blob);
+                                            var a = document.createElement('a');
+                                            a.href = url;
+                                            a.download = 'doctor_qr_' + doctorId + '.png';
+                                            document.body.appendChild(a);
+                                            a.click();
+                                            a.remove();
+                                            URL.revokeObjectURL(url);
+                                        }).catch(function(){
+                                            window.location = href;
+                                        });
+                                    });
+                                }
+                            } else {
+                                console.warn('QR API returned unsuccessful status or missing data (doctor self-view):', json);
+                                qrContainer.innerHTML = '<p class="text-xs text-red-500">Failed to load QR code.</p>';
+                            }
+                        })
+                        .catch(function(err) {
+                            console.error('QR fetch error (doctor self-view):', err);
+                            qrContainer.innerHTML = '<p class="text-xs text-red-500">Error loading QR code.</p>';
+                        });
+                });
+            });
+            </script>
+                    </div>
+                    <div>
+                        <label for="ifsc" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">IFSC Code</label>
+                        <input type="text" name="ifsc" id="ifsc" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-600 dark:border-gray-500 dark:placeholder-gray-400 dark:text-white" required>
+                    </div>
+                    <div>
+                        <label for="pan" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">PAN Number</label>
+                        <input type="text" name="pan" id="pan" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-600 dark:border-gray-500 dark:placeholder-gray-400 dark:text-white" required>
+                    </div>
+                    <div>
+                        <label for="addaar" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Aadhaar Number</label>
+                        <input type="text" name="addaar" id="addaar" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-600 dark:border-gray-500 dark:placeholder-gray-400 dark:text-white" required>
+                    </div>
+                    <div>
+                        <label for="otherDocument" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Other Document (Optional)</label>
+                        <input type="text" name="otherDocument" id="otherDocument" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-600 dark:border-gray-500 dark:placeholder-gray-400 dark:text-white">
+                    </div>
+                    
+                    <button type="submit" class="w-full text-white bg-blue-700 hover:bg-blue-800 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-2.5 text-center dark:bg-blue-600 dark:hover:bg-blue-700 dark:focus:ring-blue-800">Add Account</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Mark Payout Modal -->
+<div id="mark-payout-modal" tabindex="-1" aria-hidden="true" class="fixed top-0 left-0 right-0 z-50 hidden w-full p-4 overflow-x-hidden overflow-y-auto md:inset-0 h-[calc(100%-1rem)] max-h-full">
+    <div class="relative w-full max-w-md max-h-full">
+        <!-- Modal content -->
+        <div class="relative bg-white rounded-lg shadow dark:bg-gray-700">
+            <button type="button" class="absolute top-3 right-2.5 text-gray-400 bg-transparent hover:bg-gray-200 hover:text-gray-900 rounded-lg text-sm w-8 h-8 ml-auto inline-flex justify-center items-center dark:hover:bg-gray-600 dark:hover:text-white" data-modal-hide="mark-payout-modal">
+                <svg class="w-3 h-3" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 14 14">
+                    <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m1 1 6 6m0 0 6 6M7 7l6-6M7 7l-6 6"/>
+                </svg>
+                <span class="sr-only">Close modal</span>
+            </button>
+            <div class="px-6 py-6 lg:px-8">
+                <h3 class="mb-4 text-xl font-medium text-gray-900 dark:text-white">Mark Payout as Paid</h3>
+                <form class="space-y-6" action="{{ route('superadmin.doctors.storePayout', $doctor->api_id) }}" method="POST">
+                    @csrf
+                    
+                    <div>
+                        <label for="payoutAmount" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Payout Amount</label>
+                        <input type="number" step="0.01" name="payoutAmount" id="payoutAmount" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-green-500 focus:border-green-500 block w-full p-2.5 dark:bg-gray-600 dark:border-gray-500 dark:placeholder-gray-400 dark:text-white" required>
+                    </div>
+                    <div>
+                        <label for="payoutMonth" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Payout Month</label>
+                        <input type="month" name="payoutMonth" id="payoutMonth" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-green-500 focus:border-green-500 block w-full p-2.5 dark:bg-gray-600 dark:border-gray-500 dark:placeholder-gray-400 dark:text-white" required>
+                    </div>
+                    <div>
+                        <label for="payoutEndDate" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Payout End Date</label>
+                        <input type="date" name="payoutEndDate" id="payoutEndDate" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-green-500 focus:border-green-500 block w-full p-2.5 dark:bg-gray-600 dark:border-gray-500 dark:placeholder-gray-400 dark:text-white" required>
+                    </div>
+                    
+                    <button type="submit" class="w-full text-white bg-green-700 hover:bg-green-800 focus:ring-4 focus:outline-none focus:ring-green-300 font-medium rounded-lg text-sm px-5 py-2.5 text-center dark:bg-green-600 dark:hover:bg-green-700 dark:focus:ring-green-800">Mark as Paid</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- QR Code Modal -->
+<div id="qr-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 hidden">
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 relative w-96 max-w-full mx-4">
+        <button id="close-qr-modal" class="absolute top-3 right-3 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-2xl font-bold">&times;</button>
+        <h3 class="text-xl font-semibold mb-4 text-gray-900 dark:text-white text-center">Doctor QR Code</h3>
+        <div id="qr-modal-content" class="flex flex-col items-center justify-center min-h-[200px]">
+            <span class="text-gray-500 dark:text-gray-400">Loading...</span>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    var qrBtn = document.getElementById('view-qr-btn');
+    var qrModal = document.getElementById('qr-modal');
+    var qrContent = document.getElementById('qr-modal-content');
+    var closeBtn = document.getElementById('close-qr-modal');
+    
+    if (qrBtn) {
+        qrBtn.addEventListener('click', function() {
+            var doctorId = qrBtn.getAttribute('data-doctor-id');
+            if (!doctorId) {
+                alert('Doctor ID not found');
+                return;
+            }
+            
+            qrContent.innerHTML = '<div class="text-center"><svg class="animate-spin h-8 w-8 mx-auto text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg><p class="mt-2 text-gray-500 dark:text-gray-400">Loading QR Code...</p></div>';
+            qrModal.classList.remove('hidden');
+            
+            fetch('https://ayd.pinktreehealth.com/api/qr/' + doctorId)
+                .then(function(res) {
+                    if (!res.ok) throw new Error('API request failed');
+                    return res.json();
+                })
+                .then(function(json) {
+                    if (json.status && json.data && json.data.qrCode) {
+                        var qrData = json.data.qrData || {};
+                        qrContent.innerHTML = 
+                            '<div class="text-center">' +
+                            '<img src="' + json.data.qrCode + '" alt="Doctor QR Code" class="mb-4 max-w-full h-auto mx-auto rounded-lg border-2 border-gray-200 dark:border-gray-600" />' +
+                            '<div class="text-sm space-y-1 text-gray-700 dark:text-gray-300">' +
+                            '<p class="font-semibold text-lg text-gray-900 dark:text-white">' + (qrData.name || 'N/A') + '</p>' +
+                            (qrData.service_name && qrData.service_name.length ? '<p class="text-blue-600 dark:text-blue-400">' + qrData.service_name.join(', ') + '</p>' : '') +
+                            (qrData.phone ? '<p>' + qrData.phone + '</p>' : '') +
+                            (qrData.email ? '<p>' + qrData.email + '</p>' : '') +
+                            '</div>' +
+                            '</div>';
+                    } else {
+                        qrContent.innerHTML = '<div class="text-center text-red-500"><svg class="w-12 h-12 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg><p>Failed to load QR code.</p></div>';
+                    }
+                })
+                .catch(function(err) {
+                    console.error('QR fetch error:', err);
+                    qrContent.innerHTML = '<div class="text-center text-red-500"><svg class="w-12 h-12 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg><p>Error loading QR code.</p></div>';
+                });
+        });
+    }
+    
+    if (closeBtn) {
+        closeBtn.addEventListener('click', function() {
+            qrModal.classList.add('hidden');
+        });
+    }
+    
+    // Close modal when clicking outside
+    if (qrModal) {
+        qrModal.addEventListener('click', function(e) {
+            if (e.target === qrModal) {
+                qrModal.classList.add('hidden');
+            }
+        });
+    }
+});
+</script>
+
 @endsection

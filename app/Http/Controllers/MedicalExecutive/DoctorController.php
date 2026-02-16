@@ -193,7 +193,24 @@ class DoctorController extends Controller
             $planDetails = $planResponse->json('data');
         }
 
-        return view('doctors.show', ['doctor' => (object)$apiData, 'planDetails' => $planDetails]);
+        // Fetch wallet summary and payout history
+        $walletSummary = null;
+        $payoutHistory = [];
+        try {
+            $walletResp = $this->pinktreeApiService->getWalletSummary($doctor->api_id);
+            if ($walletResp->successful()) {
+                $walletSummary = $walletResp->json();
+            }
+
+            $historyResp = $this->pinktreeApiService->getPayoutHistory($doctor->api_id);
+            if ($historyResp->successful()) {
+                $payoutHistory = $historyResp->json('data') ?? [];
+            }
+        } catch (Exception $e) {
+            Log::warning('Failed to fetch wallet/payout info for medical-exec show: ' . $e->getMessage());
+        }
+
+        return view('doctors.show', ['doctor' => (object)$apiData, 'planDetails' => $planDetails, 'walletSummary' => $walletSummary, 'payoutHistory' => $payoutHistory]);
     }
 
     public function edit($api_id)
@@ -277,16 +294,16 @@ class DoctorController extends Controller
             // Subscription Plan
             if ($request->has('subscribe_plan') && $request->subscribe_plan && $doctor->pharmaCompany) {
                 $subData = [
-                    'pharmaId' => $doctor->pharmaCompany->api_id,
-                    'doctorId' => $doctor->api_id,
-                    'amount' => 1179, // Fixed: 999 + 18% GST
-                    'years' => 1,     // Fixed: 1 Year
+                    'doctorID' => $doctor->api_id,
+                    'email' => $request->email ?? null,
+                    'phone' => $request->phone ?? null,
+                    'amount' => $request->amount ?? 1179,
+                    'years' => $request->years ?? 1,
                     'planId' => $request->planId ?? null,
                 ];
                 
                 if ($request->filled('planId')) {
                     $subData['_id'] = $request->planId;
-                    unset($subData['planId']); 
                 }
                 
                 $this->pinktreeApiService->subscribePlan($subData);

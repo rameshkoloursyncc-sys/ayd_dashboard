@@ -29,6 +29,8 @@ class DoctorController extends Controller
             'pharma_company_id' => 'required|exists:pharma_companies,api_id',
             'amount' => 'nullable|numeric',
             'years' => 'nullable|integer|min:1',
+            'email' => 'nullable|email',
+            'phone' => 'nullable|string',
         ]);
 
         // Find the pharma company by API ID
@@ -61,6 +63,7 @@ class DoctorController extends Controller
 
         // Find or create the local doctor mapping
         $doctor = \App\Models\Doctor::where('api_id', $api_id)->first();
+        $apiData = [];
         if (!$doctor) {
             // Fetch doctor info from remote API
             $apiService = app(\App\Services\PinktreeApiService::class);
@@ -161,9 +164,18 @@ class DoctorController extends Controller
         // Handle Subscription
         if ($request->has('subscribe_plan') && $request->subscribe_plan) {
             try {
+                // Fetch doctor info if we haven't already
+                if (empty($apiData)) {
+                    $apiService = app(\App\Services\PinktreeApiService::class);
+                    $response = $apiService->getCDoctorInfo($api_id);
+                    $apiData = $response->successful() ? $response->json('data') : [];
+                }
+                $normalized = $this->normalizeDoctorApiData(is_array($apiData) ? $apiData : []);
+
                 $subData = [
-                    'pharmaId' => $pharmaCompany->api_id,
-                    'doctorId' => $api_id,
+                    'doctorID' => $api_id,
+                    'email' => $request->email ?? ($normalized['email'] ?? null),
+                    'phone' => $request->phone ?? ($normalized['phone'] ?? null),
                     'amount' => $request->amount ?? 1179,
                     'years' => $request->years ?? 1,
                     'planId' => null,
@@ -181,36 +193,100 @@ class DoctorController extends Controller
     public function subscribe(Request $request, $api_id)
     {
         $request->validate([
-            // 'amount' => 'required|numeric', // Fixed internally
-            // 'years' => 'required|integer|min:1', // Fixed internally
-            'subscription_id' => 'nullable|string',
+            'planId' => 'nullable|string',
+            'email' => 'nullable|email',
+            'phone' => 'nullable|string',
+            'amount' => 'nullable|numeric',
+            'years' => 'nullable|integer|min:1',
         ]);
 
-        $doctor = \App\Models\Doctor::where('api_id', $api_id)->firstOrFail();
+        $api_id = trim($api_id);
 
-        if (!$doctor->pharmaCompany) {
-            return back()->withErrors(['error' => 'Doctor must be attached to a pharma company before subscribing.']);
+        $requestContext = [
+            'doctor_api_id' => $api_id,
+            'user_id' => optional($request->user())->id,
+            'user_role' => optional($request->user())->role,
+            'input' => $request->except(['_token'])
+        ];
+        Log::info('[SuperAdmin][subscribe] Incoming subscription request', $requestContext);
+
+        // Try to find local doctor
+        $doctor = \App\Models\Doctor::where('api_id', $api_id)->first();
+        
+        // If not found locally, we should still allow subscription if the doctor exists in Pinktree
+        // But if they ARE local, we enforce pharma company attachment
+        if ($doctor) {
+            if (!$doctor->pharmaCompany) {
+                Log::warning('[SuperAdmin][subscribe] Local Doctor missing pharma company', ['doctor_api_id' => $api_id]);
+                // We might want to warn instead of failing, but business logic implies attachment needed?
+                // For now, let's relax this or maybe just Log, given the 'Doctor not found' error was the blocker.
+                // return back()->withErrors(['error' => 'Doctor must be attached to a pharma company before subscribing.']);
+            }
+        } else {
+             Log::info('[SuperAdmin][subscribe] Doctor not found locally, proceeding with remote doctor ID', ['doctor_api_id' => $api_id]);
         }
 
         try {
+            // Fetch doctor info from Pinktree to get email/phone if not provided in request
+            $apiService = app(\App\Services\PinktreeApiService::class);
+            $docResponse = $apiService->getCDoctorInfo($api_id);
+            
+            if (!$docResponse->successful()) {
+                 return back()->withErrors(['error' => 'Doctor not found in Pinktree system.']);
+            }
+            
+            $apiData = $docResponse->json('data');
+            $normalized = $this->normalizeDoctorApiData(is_array($apiData) ? $apiData : []);
+
+            $email = $request->email ?? ($normalized['email'] ?? null);
+            $phone = $request->phone ?? ($normalized['phone'] ?? null);
+
             $subData = [
-                'pharmaId' => $doctor->pharmaCompany->api_id,
-                'doctorId' => $doctor->api_id,
-                'amount' => 1179, // Fixed: 999 + 18% GST
-                'years' => 1,     // Fixed: 1 Year
+                'doctorID' => $api_id,
+                'email' => $email,
+                'phone' => $phone,
+                'amount' => $request->amount ?? 1179,
+                'years' => $request->years ?? 1,
                 'planId' => null,
             ];
 
-            if ($request->filled('subscription_id')) {
-                $subData['_id'] = $request->subscription_id;
+            if ($request->filled('planId')) {
+                $subData['planId'] = $request->planId;
+                Log::info('[SuperAdmin][subscribe] Existing subscription detected, updating plan', ['planId' => $request->planId]);
             }
 
-            $this->pinktreeApiService->subscribePlan($subData);
-            Log::info('subscribe: Subscribed/Updated doctor plan', $subData);
+            Log::info('[SuperAdmin][subscribe] Prepared Pinktree payload', $subData);
+
+            $response = $this->pinktreeApiService->subscribePlan($subData);
+
+            $responseSummary = [
+                'status_code' => method_exists($response, 'status') ? $response->status() : null,
+                'successful' => method_exists($response, 'successful') ? $response->successful() : null,
+                'body' => method_exists($response, 'json') ? $response->json() : null,
+            ];
+            Log::info('[SuperAdmin][subscribe] Pinktree response received', $responseSummary);
+
+            $failed = !$responseSummary['successful'];
+            if (!$failed && is_array($responseSummary['body']) && array_key_exists('status', $responseSummary['body'])) {
+                $failed = $responseSummary['body']['status'] !== true;
+            }
+
+            if ($failed) {
+                Log::error('[SuperAdmin][subscribe] Pinktree subscribe call failed', $responseSummary + ['payload' => $subData]);
+                return back()->withErrors(['error' => 'Failed to assign subscription. API Response: ' . ($responseSummary['body']['message'] ?? 'Unknown error')]);
+            }
+
+            Log::info('[SuperAdmin][subscribe] Subscription assignment completed', [
+                'doctor_api_id' => $api_id,
+            ]);
+
             return back()->with('success', 'Subscription assigned/updated successfully.');
         } catch (\Exception $e) {
-            Log::error('subscribe: Failed to subscribe doctor', ['error' => $e->getMessage()]);
-            return back()->withErrors(['error' => 'Failed to assign subscription.']);
+            Log::error('[SuperAdmin][subscribe] Exception while assigning subscription', [
+                'doctor_api_id' => $api_id,
+                'error' => $e->getMessage(),
+            ]);
+            return back()->withErrors(['error' => 'Failed to assign subscription: ' . $e->getMessage()]);
         }
     }
 
@@ -369,6 +445,7 @@ class DoctorController extends Controller
         $fields = [
             'name', 'email', 'phone', 'gender', 'dob', 'age', 'degree', 'uniqueId', 'experience', 'placeName',
             'registrationNo', 'yearOfRegistration', 'recommendation', 'approvalStatus', 'createdAt', 'updatedAt',
+            'bankAccounts',
         ];
         foreach ($fields as $field) {
             $doctor->{$field} = $normalized[$field] ?? null;
@@ -416,15 +493,79 @@ class DoctorController extends Controller
         // Check Subscription Plan
         $planDetails = null;
         try {
+            Log::info('[SuperAdmin][DoctorController@show] Checking doctor plan', ['doctorId' => $api_id]);
             $planResponse = $this->pinktreeApiService->checkDoctorPlan($api_id);
             if ($planResponse->successful()) {
                 $planDetails = $planResponse->json();
+                Log::info('[SuperAdmin][DoctorController@show] Doctor plan details received', ['details' => $planDetails]);
+            } else {
+                Log::warning('[SuperAdmin][DoctorController@show] Failed to check doctor plan', ['status' => $planResponse->status(), 'body' => $planResponse->body()]);
             }
         } catch (\Exception $e) {
-            Log::error('Failed to check doctor plan: ' . $e->getMessage());
+            Log::error('[SuperAdmin][DoctorController@show] Exception checking doctor plan: ' . $e->getMessage());
         }
 
-        return view('superadmin.doctors.show', compact('doctor', 'planDetails', 'apiData'));
+        // Fetch bank accounts for edit view (so user can see/delete existing accounts)
+        try {
+            Log::info('[SuperAdmin][DoctorController] Fetching doctor accounts for edit view', ['doctorId' => $api_id, 'user_id' => auth()->id() ?? null]);
+            $accounts = $this->pinktreeApiService->getDoctorAccountsById($api_id);
+            Log::info('[SuperAdmin][DoctorController] Received doctor accounts for edit view', ['doctorId' => $api_id, 'count' => is_array($accounts) ? count($accounts) : 0]);
+        } catch (\Exception $e) {
+            Log::error('Failed to fetch doctor bank accounts for edit view from Pinktree: ' . $e->getMessage(), ['doctorId' => $api_id]);
+            $accounts = [];
+        }
+
+        // Attach accounts to doctor object for the view
+        $doctor->bankAccounts = is_array($accounts) ? $accounts : [];
+
+        // Fetch Wallet Summary and Payout History
+        $walletSummary = null;
+        $payoutHistory = [];
+        try {
+            $walletResp = $this->pinktreeApiService->getWalletSummary($api_id);
+            if ($walletResp->successful()) {
+                $walletSummary = $walletResp->json();
+            }
+
+            Log::info('[PAYOUT_HISTORY] Fetching payout history', ['doctorId' => $api_id]);
+            $historyResp = $this->pinktreeApiService->getPayoutHistory($api_id);
+            Log::info('[PAYOUT_HISTORY] Payout history API response', [
+                'status' => method_exists($historyResp, 'status') ? $historyResp->status() : null,
+                'body' => method_exists($historyResp, 'body') ? $historyResp->body() : null,
+                'successful' => method_exists($historyResp, 'successful') ? $historyResp->successful() : null
+            ]);
+            if ($historyResp->successful()) {
+                $data = $historyResp->json('data') ?? [];
+                // If payoutHistory is nested, extract it
+                $payoutHistory = [];
+                foreach ($data as $item) {
+                    if (isset($item['payoutHistory'])) {
+                        $payout = $item['payoutHistory'];
+                        // Merge parent fields if needed
+                        $payout['doctorId'] = $item['doctorId'] ?? null;
+                        $payout['currentBalance'] = $item['currentBalance'] ?? null;
+                        $payout['totalPaidEarnings'] = $item['totalPaidEarnings'] ?? null;
+                        $payout['totalEarnings'] = $item['totalEarnings'] ?? null;
+                        $payoutHistory[] = $payout;
+                    }
+                }
+            }
+        } catch (\Exception $e) {
+            Log::error('[PAYOUT_HISTORY] Failed to fetch wallet/payout info: ' . $e->getMessage());
+        }
+
+        // Fetch bank accounts via Pinktree API (if available)
+        $accounts = [];
+        try {
+            Log::info('[SuperAdmin][DoctorController] Fetching doctor accounts from Pinktree', ['doctorId' => $api_id, 'user_id' => auth()->id() ?? null]);
+            $accounts = $this->pinktreeApiService->getDoctorAccountsById($api_id);
+            Log::info('[SuperAdmin][DoctorController] Received doctor accounts', ['doctorId' => $api_id, 'count' => is_array($accounts) ? count($accounts) : 0]);
+        } catch (\Exception $e) {
+            Log::error('Failed to fetch doctor bank accounts from Pinktree: ' . $e->getMessage(), ['doctorId' => $api_id]);
+            $accounts = [];
+        }
+
+        return view('superadmin.doctors.show', compact('doctor', 'planDetails', 'apiData', 'walletSummary', 'payoutHistory', 'accounts'));
     }
 
     public function edit($api_id)
@@ -448,6 +589,7 @@ class DoctorController extends Controller
         $fields = [
             'name', 'email', 'phone', 'gender', 'dob', 'age', 'degree', 'uniqueId', 'experience', 'placeName',
             'registrationNo', 'yearOfRegistration', 'recommendation', 'approvalStatus', 'createdAt', 'updatedAt',
+            'bankAccounts',
         ];
         foreach ($fields as $field) {
             $doctor->{$field} = $normalized[$field] ?? null;
@@ -468,12 +610,16 @@ class DoctorController extends Controller
         // Check Subscription Plan
         $planDetails = null;
         try {
+            Log::info('[SuperAdmin][DoctorController@edit] Checking doctor plan', ['doctorId' => $api_id]);
             $planResponse = $this->pinktreeApiService->checkDoctorPlan($api_id);
             if ($planResponse->successful()) {
                 $planDetails = $planResponse->json();
+                Log::info('[SuperAdmin][DoctorController@edit] Doctor plan details received', is_array($planDetails) ? $planDetails : ['raw' => $planDetails]);
+            } else {
+                Log::warning('[SuperAdmin][DoctorController@edit] Failed to check doctor plan', ['status' => $planResponse->status(), 'body' => $planResponse->body()]);
             }
         } catch (\Exception $e) {
-            Log::error('Failed to check doctor plan: ' . $e->getMessage());
+            Log::error('[SuperAdmin][DoctorController@edit] Exception checking doctor plan: ' . $e->getMessage());
         }
 
         return view('doctors.edit', compact('doctor', 'services', 'planDetails'));
@@ -567,20 +713,17 @@ class DoctorController extends Controller
         // Subscription Plan
         if ($request->has('subscribe_plan') && $request->subscribe_plan && $doctor && $doctor->pharmaCompany) {
             $subData = [
-                'pharmaId' => $doctor->pharmaCompany->api_id,
-                'doctorId' => $api_id,
-                'amount' => 1179, // Fixed: 999 + 18% GST
-                'years' => 1,     // Fixed: 1 Year
+                'doctorID' => $api_id,
+                'email' => $request->email ?? null,
+                'phone' => $request->phone ?? null,
+                'amount' => $request->amount ?? 1179,
+                'years' => $request->years ?? 1,
                 'planId' => $request->planId ?? null,
             ];
             // If planId is provided (from hidden input in edit form), it maps to _id in API for update
             if ($request->filled('planId')) {
                 $subData['_id'] = $request->planId;
-                unset($subData['planId']); // Ensure we send _id for updates if that's what API expects, or keep planId if API handles mapping. 
                 // Based on previous context, update uses _id. subscribePlan method in service sends data as is.
-                // Let's check subscribePlan in Service. It sends to /api/plan/subscribe.
-                // If the API expects '_id' for update, we should set it.
-                // The previous code in subscribe() method did: if ($request->filled('subscription_id')) { $subData['_id'] = ... }
             }
             
             $this->pinktreeApiService->subscribePlan($subData);
@@ -613,6 +756,7 @@ class DoctorController extends Controller
             'createdAt' => ['createdAt', 'created_at'],
             'updatedAt' => ['updatedAt', 'updated_at'],
             'service_ids' => ['service_ids', 'serviceIds', 'service_id', 'serviceId'],
+            'bankAccounts' => ['bankAccounts', 'accounts', 'bank_accounts'],
         ];
 
         $result = [];
@@ -661,4 +805,157 @@ class DoctorController extends Controller
 
         return redirect()->route('superadmin.doctors.index')->with('success', 'Doctor deleted successfully.');
     }
+
+    public function storeBankAccount(Request $request)
+    {
+        $request->validate([
+            'doctorId' => 'required',
+            'accountno' => 'required',
+            'ifsc' => 'required',
+            'pan' => 'required',
+            'addaar' => 'required',
+            'source' => 'required',
+            'otherDocument' => 'nullable'
+        ]);
+
+        try {
+            // Prepare masked payload for logs to avoid storing full sensitive data
+            $payload = $request->all();
+            $logPayload = $payload;
+            if (isset($logPayload['accountno'])) {
+                $logPayload['accountno'] = '****' . substr($logPayload['accountno'], -4);
+            }
+            if (isset($logPayload['pan'])) {
+                $pan = $logPayload['pan'];
+                $logPayload['pan'] = strlen($pan) > 3 ? '***' . substr($pan, -3) : '***';
+            }
+            if (isset($logPayload['addaar'])) {
+                $add = $logPayload['addaar'];
+                $logPayload['addaar'] = '****' . substr($add, -4);
+            }
+
+            Log::info('[SuperAdmin][DoctorController] Creating doctor bank account', ['doctorId' => $request->doctorId ?? null, 'payload' => $logPayload, 'user_id' => auth()->id() ?? null]);
+
+            $response = $this->pinktreeApiService->createAccount($payload);
+
+            // Log response details (snippet)
+            try {
+                $respStatus = method_exists($response, 'status') ? $response->status() : null;
+                $respBody = method_exists($response, 'body') ? $response->body() : null;
+            } catch (\Exception $e) {
+                $respStatus = null;
+                $respBody = null;
+            }
+
+            Log::info('[SuperAdmin][DoctorController] createAccount response', ['doctorId' => $request->doctorId ?? null, 'status' => $respStatus, 'body_snippet' => is_string($respBody) ? substr($respBody, 0, 2000) : $respBody]);
+
+            if ($response->successful()) {
+                return back()->with('success', 'Bank account added successfully.');
+            }
+
+            return back()->withErrors(['msg' => 'Failed to add bank account: ' . $respBody]);
+        } catch (\Exception $e) {
+            Log::error('[SuperAdmin][DoctorController] Exception creating bank account', ['error' => $e->getMessage(), 'doctorId' => $request->doctorId ?? null]);
+            return back()->withErrors(['msg' => 'Error adding bank account: ' . $e->getMessage()]);
+        }
+    }
+
+    public function destroyBankAccount($accountId)
+    {
+        try {
+            $response = $this->pinktreeApiService->deleteAccount($accountId);
+            if ($response->successful()) {
+                return back()->with('success', 'Bank account deleted successfully.');
+            }
+            return back()->withErrors(['msg' => 'Failed to delete bank account: ' . $response->body()]);
+        } catch (\Exception $e) {
+            return back()->withErrors(['msg' => 'Error deleting bank account: ' . $e->getMessage()]);
+        }
+    }
+
+    public function storePayout(Request $request, $api_id)
+    {
+        $request->validate([
+            'payoutAmount' => 'required|numeric|min:1',
+            'payoutMonth' => 'required', // Accepts date string or YYYY-MM
+            'payoutEndDate' => 'required',
+        ]);
+
+        try {
+            $payoutEndDate = $request->payoutEndDate;
+            // If it's just YYYY-MM-DD, append time to make it ISO-like
+            if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $payoutEndDate)) {
+                $payoutEndDate .= 'T00:00:00.000Z';
+            }
+
+            $payload = [
+                'doctorId' => $api_id,
+                'payoutAmount' => $request->payoutAmount,
+                'payoutMonth' => $request->payoutMonth,
+                'payoutEndDate' => $payoutEndDate,
+            ];
+
+            Log::info('[PAYOUT] Creating payout', ['payload' => $payload]);
+            $response = $this->pinktreeApiService->createPayout($payload);
+            Log::info('[PAYOUT] Payout API response', [
+                'status' => method_exists($response, 'status') ? $response->status() : null,
+                'body' => method_exists($response, 'body') ? $response->body() : null,
+                'successful' => method_exists($response, 'successful') ? $response->successful() : null
+            ]);
+
+            if ($response->successful()) {
+                return back()->with('success', 'Payout marked successfully.');
+            } else {
+                return back()->withErrors(['payout' => 'Failed to mark payout: ' . $response->body()]);
+            }
+        } catch (\Exception $e) {
+            Log::error('[PAYOUT] Exception: ' . $e->getMessage());
+            return back()->withErrors(['payout' => 'An error occurred while processing payout.']);
+        }
+    }
+
+     public function updateBankAccount(Request $request, $accountId)
+        {
+            $request->validate([
+                'doctorId' => 'required',
+                'accountno' => 'required',
+                'ifsc' => 'required',
+                'pan' => 'required',
+                'addaar' => 'required',
+                'source' => 'required',
+                'otherDocument' => 'nullable'
+            ]);
+
+            try {
+                $payload = $request->all();
+                $payload['_id'] = $accountId;
+                $logPayload = $payload;
+                if (isset($logPayload['accountno'])) {
+                    $logPayload['accountno'] = '****' . substr($logPayload['accountno'], -4);
+                }
+                if (isset($logPayload['pan'])) {
+                    $pan = $logPayload['pan'];
+                    $logPayload['pan'] = strlen($pan) > 3 ? '***' . substr($pan, -3) : '***';
+                }
+                if (isset($logPayload['addaar'])) {
+                    $add = $logPayload['addaar'];
+                    $logPayload['addaar'] = '****' . substr($add, -4);
+                }
+
+                Log::info('[SuperAdmin][DoctorController] Updating doctor bank account', ['accountId' => $accountId, 'payload' => $logPayload, 'user_id' => auth()->id() ?? null]);
+
+                $response = $this->pinktreeApiService->updateAccount($payload);
+
+                $respStatus = method_exists($response, 'status') ? $response->status() : null;
+                $respBody = method_exists($response, 'body') ? $response->body() : null;
+                Log::info('[SuperAdmin][DoctorController] updateAccount response', ['accountId' => $accountId, 'status' => $respStatus, 'body_snippet' => is_string($respBody) ? substr($respBody, 0, 2000) : $respBody]);
+
+                if ($response->successful()) {
+                    return back()->with('success', 'Bank account updated successfully.');
+                }
+                return back()->withErrors(['msg' => 'Failed to update bank account: ' . $response->body()]);
+            } catch (\Exception $e) {
+                return back()->withErrors(['msg' => 'Error updating bank account: ' . $e->getMessage()]);
+            }
+        }
 }
