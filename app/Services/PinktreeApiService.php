@@ -98,6 +98,11 @@ class PinktreeApiService
         return Http::delete($this->baseUrl . '/api/deleteMedicalPractitioner/' . $medicalPractitionerId);
     }
 
+    public function getAllMedicalPractitioners()
+    {
+        return Http::get($this->baseUrl . '/api/getAllMedicalPractitioners');
+    }
+
     // Doctor Endpoints
     public function createDoctor(array $data)
     {

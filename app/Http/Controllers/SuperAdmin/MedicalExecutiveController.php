@@ -27,25 +27,58 @@ class MedicalExecutiveController extends Controller
 
     public function index()
     {
-        $medicalExecutives = MedicalExecutive::with('user', 'pharmaCompany')->get();
-        $executivesWithPharmaName = $medicalExecutives->map(function ($executive) {
-            $pharmaName = 'N/A';
-            if ($executive->pharmaCompany && $executive->pharmaCompany->api_id) {
-                $apiService = app(\App\Services\PinktreeApiService::class);
-                $response = $apiService->getByPharmaId($executive->pharmaCompany->api_id);
-                if ($response->successful() && isset($response->json('data')['name'])) {
-                    $pharmaName = $response->json('data')['name'];
+        // Fetch all Medical Executives from remote API
+        try {
+            $remoteExecutivesResponse = $this->pinktreeApiService->getAllMedicalPractitioners();
+            $remoteExecutives = $remoteExecutivesResponse->successful() ? ($remoteExecutivesResponse->json('data') ?? []) : [];
+        } catch (\Exception $e) {
+            Log::error('Failed to fetch medical executives from remote API: ' . $e->getMessage());
+            $remoteExecutives = [];
+            session()->flash('error', 'Unable to connect to the external API. Medical Executive list may be empty.');
+        }
+
+        // Fetch all local medical executives
+        $localExecutives = MedicalExecutive::with(['user', 'pharmaCompany'])->get()->keyBy('api_id');
+        
+        // Fetch local Pharma Companies for the dropdown
+        $localPharmaCompanies = PharmaCompany::with('user')->get();
+
+        $medicalExecutives = collect($remoteExecutives)->map(function ($remoteExec) use ($localExecutives) {
+            $apiId = isset($remoteExec['_id']) ? trim($remoteExec['_id']) : null;
+            $local = $apiId && $localExecutives->has($apiId) ? $localExecutives[$apiId] : null;
+
+            $pharmaCompanyName = 'Not Mapped';
+            if ($local) {
+                if ($local->pharmaCompany) {
+                    $pharmaResponse = $this->pinktreeApiService->getByPharmaId($local->pharmaCompany->api_id);
+                    if ($pharmaResponse->successful() && isset($pharmaResponse->json('data')['name'])) {
+                        $pharmaCompanyName = $pharmaResponse->json('data')['name'];
+                    }
+                }
+            } else {
+                // Try to find if pharmaConnectedTo is present in remote response and fetch it
+                if (isset($remoteExec['pharmaConnectedTo']) && !empty($remoteExec['pharmaConnectedTo'])) {
+                    $pharmaResponse = $this->pinktreeApiService->getByPharmaId($remoteExec['pharmaConnectedTo']);
+                    if ($pharmaResponse->successful() && isset($pharmaResponse->json('data')['name'])) {
+                        $pharmaCompanyName = $pharmaResponse->json('data')['name'] . ' (External)';
+                    }
                 }
             }
-            $executive->pharma_company_name = $pharmaName;
-            return $executive;
+
+            return (object) [
+                'name' => $remoteExec['name'] ?? ($local ? $local->user->name : 'N/A'),
+                'email' => $remoteExec['emailId'] ?? ($local ? $local->user->email : 'N/A'),
+                'pharma_company_name' => $pharmaCompanyName,
+                'api_id' => $apiId,
+                'is_local' => (bool) $local,
+                'pharma_company_id' => $local ? $local->pharma_company_id : null,
+                'user' => $local ? (object)['name' => $local->user->name, 'email' => $local->user->email] : (object)['name' => $remoteExec['name'] ?? 'N/A', 'email' => $remoteExec['emailId'] ?? 'N/A']
+            ];
         });
 
-        $pharmaCompanies = PharmaCompany::with('user')->get();
-
         return view('superadmin.medical-executives.index', [
-            'medicalExecutives' => $executivesWithPharmaName,
-            'pharmaCompanies' => $pharmaCompanies
+            'medicalExecutives' => $medicalExecutives,
+            'pharmaCompanies' => $localPharmaCompanies
         ]);
     }
 
