@@ -12,7 +12,8 @@ class PinktreeApiService
 
     public function __construct()
     {
-        $this->baseUrl = env('PINKTREE_API_BASE_URL');
+        // $this->baseUrl = env('PINKTREE_API_BASE_URL');
+        $this->baseUrl = config('services.pinktree.base_url');
         if (!$this->baseUrl) {
             throw new Exception('PINKTREE_API_BASE_URL is not set in environment.');
         }

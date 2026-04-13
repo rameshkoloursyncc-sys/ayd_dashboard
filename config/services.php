@@ -34,5 +34,8 @@ return [
             'channel' => env('SLACK_BOT_USER_DEFAULT_CHANNEL'),
         ],
     ],
+    'pinktree' => [
+    'base_url' => env('PINKTREE_API_BASE_URL'),
+],
 
 ];
