@@ -5,7 +5,7 @@
     <div class="flex flex-col items-center justify-center px-6 pt-8 mx-auto md:h-screen pt:mt-0 dark:bg-gray-900">
         <a href="#" class="flex items-center justify-center mb-8 text-2xl font-semibold lg:mb-10 dark:text-white">
             <img src="{{ asset('images/logo.jpeg') }}" class="mr-4 h-16" alt="Logo">
-            <span>AYD Subscription</span>
+            <!-- <span></span> -->
         </a>
         <!-- Card -->
         <div class="w-full max-w-xl p-6 space-y-8 bg-white rounded-lg shadow-md sm:p-8 dark:bg-gray-800">

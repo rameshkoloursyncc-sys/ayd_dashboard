@@ -8,7 +8,7 @@
         </button>
         <a href="{{ url('/') }}" class="flex ml-2 md:mr-24">
           <img src="{{ asset('images/logo.jpeg') }}" class="h-12 mr-3" alt="Logo" />
-          <span class="self-center text-xl font-semibold sm:text-2xl whitespace-nowrap dark:text-white">Koloursyncc</span>
+          <span class="self-center text-xl font-semibold sm:text-2xl whitespace-nowrap dark:text-white">Ask Your Doctor AYD</span>
         </a>
       </div>
       <div class="flex items-center">
